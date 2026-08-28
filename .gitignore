@@ -1,0 +1,30 @@
+.DS_Store
+.worktrees/
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.egg-info/
+# Local account data and broker exports must never enter version control.
+/data/
+/reports/
+*.csv
+*.csv.gz
+*.db
+*.db.backup-*
+*.db-shm
+*.db-wal
+node_modules/
+dist/
+coverage/
+.env
+*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
+frontend/test-results/
+frontend/playwright-report/
+output/playwright/
+# Internal planning notes can contain local account migration context.
+/docs/plans/
+/docs/superpowers/
+.playwright-cli/

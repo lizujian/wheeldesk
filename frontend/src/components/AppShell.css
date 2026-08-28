@@ -1,0 +1,81 @@
+.nav-signal-count {
+  margin-left: auto;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 6px;
+  display: inline-grid;
+  place-items: center;
+  background: #e5c761;
+  color: #18211f;
+  font-size: 10px;
+  line-height: 1;
+}
+
+.nav-signal-count.critical {
+  background: #d24a45;
+  color: white;
+}
+
+.global-signal-indicator {
+  min-width: 158px;
+  min-height: 42px;
+  padding: 5px 8px 5px 10px;
+  border: 1px solid #d4dad5;
+  color: #5f6965;
+  background: #f5f7f4;
+  display: grid;
+  grid-template-columns: 18px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
+}
+
+.global-signal-indicator > span {
+  display: grid;
+  gap: 1px;
+}
+
+.global-signal-indicator strong {
+  color: #37413e;
+  font-size: 11px;
+}
+
+.global-signal-indicator small {
+  color: #7b8581;
+  font-size: 9px;
+}
+
+.global-signal-indicator > b {
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
+  display: grid;
+  place-items: center;
+  background: #e5c761;
+  color: #18211f;
+  font-size: 11px;
+}
+
+.global-signal-indicator.active {
+  border-color: #d4b94f;
+  background: #fff8db;
+  color: #86620d;
+}
+
+.global-signal-indicator.active strong { color: #644a0d; }
+.global-signal-indicator.active small { color: #856e32; }
+
+.global-signal-indicator.critical {
+  border-color: #d7746f;
+  background: #fff0ee;
+  color: #a12d2a;
+}
+
+.global-signal-indicator.critical strong { color: #8d2926; }
+.global-signal-indicator.critical small { color: #a35d58; }
+.global-signal-indicator.critical > b { background: #c43d3d; color: white; }
+
+@media (max-width: 1050px) {
+  .sidebar nav a { position: relative; }
+  .nav-signal-count { position: absolute; top: 2px; right: 2px; min-width: 17px; height: 17px; padding: 0 4px; font-size: 8px; }
+}

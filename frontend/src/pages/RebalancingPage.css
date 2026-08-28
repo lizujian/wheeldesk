@@ -1,0 +1,62 @@
+.rebalance-console { --rebalance-accent: #9b4d3f; }
+.rebalance-schedule { min-height: 92px; border: 1px solid var(--line); background: var(--paper); padding: 15px 18px; display: grid; grid-template-columns: minmax(260px, 1fr) 170px auto auto; align-items: end; gap: 12px; }
+.rebalance-schedule.due { border-left: 5px solid var(--rebalance-accent); }
+.rebalance-status { display: flex; align-items: center; gap: 11px; align-self: center; }
+.rebalance-status svg { color: var(--rebalance-accent); }
+.rebalance-status div { display: grid; gap: 3px; }
+.rebalance-status span, .rebalance-status small { color: var(--muted); font-size: 10px; }
+.rebalance-status strong { font-size: 14px; }
+.rebalance-allocation, .rebalance-recommendations { border: 1px solid var(--line); background: var(--paper); padding: 21px; }
+.rebalance-allocation-grid { margin-top: 16px; border-top: 1px solid var(--line); display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.rebalance-allocation-grid > div { min-height: 116px; padding: 16px; border-right: 1px solid var(--line); display: grid; align-content: center; gap: 5px; }
+.rebalance-allocation-grid > div:last-child { border: 0; }
+.rebalance-allocation-grid span, .rebalance-allocation-grid small { color: var(--muted); font-size: 10px; }
+.rebalance-allocation-grid strong { font-family: Georgia, "Songti SC", serif; font-size: 22px; }
+.rebalance-allocation-grid em { width: fit-content; padding: 4px 6px; font-style: normal; font-size: 9px; font-weight: 800; }
+.rebalance-allocation-grid em.over { color: var(--blue); background: #e8f2f8; }
+.rebalance-allocation-grid em.under { color: #87600d; background: #fbf2d9; }
+.rebalance-decision { border: 1px solid var(--line); background: #edf0ee; display: grid; grid-template-columns: 1.4fr 1fr 1fr; }
+.rebalance-decision > div { min-height: 100px; padding: 17px 21px; border-right: 1px solid #d4dbd6; display: grid; align-content: center; gap: 4px; }
+.rebalance-decision > div:last-child { border: 0; }
+.rebalance-decision h2 { margin: 3px 0; font-size: 17px; }
+.rebalance-decision span, .rebalance-decision small { color: var(--muted); font-size: 10px; }
+.rebalance-decision strong { font-family: Georgia, "Songti SC", serif; font-size: 21px; }
+.rebalance-transition { border: 1px solid var(--line); border-left: 5px solid var(--green); background: #f2f8f4; display: grid; grid-template-columns: minmax(220px, .65fr) 1.35fr; }
+.transition-target { padding: 17px 21px; border-right: 1px solid #cfddd3; display: grid; align-content: center; gap: 4px; }
+.transition-target span, .transition-target small, .transition-sources small { color: var(--muted); font-size: 10px; }
+.transition-target strong { font-family: Georgia, "Songti SC", serif; font-size: 22px; }
+.transition-sources { display: grid; grid-template-columns: 1fr 1fr; }
+.transition-sources > div { min-height: 88px; padding: 14px 16px; border-right: 1px solid #cfddd3; display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 10px; }
+.transition-sources > div:last-child { border: 0; }
+.transition-sources span { display: grid; gap: 3px; }
+.transition-sources strong { font-size: 14px; }
+.transition-sources svg { color: var(--green); }
+.recommendation-list { margin-top: 15px; border-top: 1px solid var(--line); }
+.recommendation-list > div { min-height: 62px; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 12px; }
+.recommendation-list b { width: 24px; height: 24px; background: var(--ink); color: white; display: grid; place-items: center; font-size: 10px; }
+.recommendation-list span { display: grid; gap: 3px; }
+.recommendation-list strong { font-size: 12px; }
+.recommendation-list small { color: var(--muted); font-size: 10px; }
+.recommendation-list em { font-family: Georgia, "Songti SC", serif; font-style: normal; font-size: 17px; }
+.rebalance-clear, .rebalance-empty { min-height: 120px; color: var(--muted); display: grid; place-content: center; justify-items: center; gap: 8px; font-size: 11px; }
+.rebalance-sale { border: 1px solid #dca69d; border-left: 5px solid var(--rebalance-accent); background: #fff8f5; padding: 20px; display: grid; grid-template-columns: minmax(260px, .7fr) 1.3fr; gap: 24px; align-items: end; }
+.rebalance-sale > div:first-child { display: flex; align-items: flex-start; gap: 11px; color: var(--rebalance-accent); }
+.rebalance-sale h2 { margin: 3px 0; font-size: 17px; }
+.rebalance-sale small { color: #775d58; font-size: 10px; }
+.rebalance-sale form { display: grid; grid-template-columns: repeat(3, 1fr) minmax(130px, .8fr) auto; gap: 10px; align-items: end; }
+.rebalance-sale form > div { min-height: 38px; border: 1px solid var(--line); background: white; padding: 5px 9px; display: grid; gap: 2px; }
+.rebalance-sale form > div span { color: var(--muted); font-size: 9px; }
+.rebalance-sale form > div strong { font-size: 11px; }
+.rebalance-locked { border: 1px solid var(--line); background: #edf0ee; padding: 17px 20px; display: flex; gap: 11px; align-items: center; color: var(--muted); }
+.rebalance-locked div { display: grid; gap: 3px; }
+.rebalance-locked strong { color: var(--ink); font-size: 12px; }
+.rebalance-locked span { font-size: 10px; }
+
+@media (max-width: 1120px) {
+  .rebalance-schedule { grid-template-columns: 1fr 180px auto; }
+  .rebalance-schedule > button:last-child { grid-column: 2 / -1; }
+  .rebalance-sale { grid-template-columns: 1fr; }
+  .rebalance-sale form { grid-template-columns: repeat(3, 1fr); }
+  .rebalance-transition { grid-template-columns: 1fr; }
+  .transition-target { border-right: 0; border-bottom: 1px solid #cfddd3; }
+}

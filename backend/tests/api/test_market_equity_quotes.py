@@ -105,6 +105,9 @@ def test_refresh_updates_each_public_equity_without_failing_the_batch() -> None:
         assert payload["core"]["selected_symbol"] in {"BRK.B", "VOO"}
         assert payload["core"]["recommendation"]["symbol"] in {"BRK.B", "VOO"}
         assert payload["core"]["recommendation"]["cash_required"] == 0.0
+        assert payload["core"]["recommendation"]["daily_change"] == 0.0
+        assert payload["core"]["recommendation"]["signal_score"] == 0
+        assert payload["core"]["recommendation"]["trend_reduced"] is False
 
         positions = client.get("/api/positions").json()
         assert positions[0]["current_price"] == 510.0

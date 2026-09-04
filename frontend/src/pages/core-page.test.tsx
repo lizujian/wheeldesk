@@ -22,16 +22,16 @@ const portfolio: PortfolioSummary = {
 }
 
 const brkAsset = {
-  symbol: 'BRK.B' as const, current_value: 7350, price: 490, rsi14: 55, drawdown: .02,
+  symbol: 'BRK.B' as const, current_value: 7350, price: 490, rsi14: 55, drawdown: .02, daily_change: .006,
   ma200: 460, below_ma200_two_days: false, return_20d: .08, return_126d: .18,
-  code: 'monthly' as const, actionable: true, fraction: .1, strategy_amount: 4025,
-  executable_amount: 4025, funding_required: 0, shares: 8.2143,
+  code: 'monthly' as const, actionable: true, fraction: .05, strategy_amount: 2012.5,
+  executable_amount: 2012.5, funding_required: 0, shares: 4.1071, signal_score: 0, trend_reduced: false,
 }
 const vooAsset = {
-  symbol: 'VOO' as const, current_value: 2400, price: 600, rsi14: 44, drawdown: .06,
+  symbol: 'VOO' as const, current_value: 2400, price: 600, rsi14: 44, drawdown: .06, daily_change: -.018,
   ma200: 560, below_ma200_two_days: false, return_20d: -.04, return_126d: .08,
   code: 'pullback' as const, actionable: true, fraction: .2, strategy_amount: 8050,
-  executable_amount: 8050, funding_required: 0, shares: 13.4167,
+  executable_amount: 8050, funding_required: 0, shares: 13.4167, signal_score: 4, trend_reduced: false,
 }
 
 const market: MarketSnapshot = {
@@ -70,6 +70,8 @@ describe('core equity page', () => {
     expect(screen.getByText('$40,250.00')).toBeInTheDocument()
     expect(screen.getByRole('article', { name: 'BRK.B 核心仓状态' })).toBeInTheDocument()
     expect(screen.getByRole('article', { name: 'VOO 核心仓状态' })).toHaveClass('selected')
+    expect(screen.getByText('-1.8% / -6.0% / 44.0')).toBeInTheDocument()
+    expect(screen.getByText('机会积分 4 / 6')).toBeInTheDocument()
     expect(screen.getByText('第 1 笔 · 2026-07-05')).toBeInTheDocument()
   })
 

@@ -14,6 +14,7 @@ def inputs(**overrides) -> CoreBuyInputs:
         "as_of": date(2026, 7, 22),
         "price": Decimal("500"),
         "drawdown": Decimal("0"),
+        "daily_change": Decimal("0"),
         "rsi14": Decimal("55"),
         "vix": Decimal("18"),
         "target_gap": Decimal("50000"),
@@ -25,14 +26,20 @@ def inputs(**overrides) -> CoreBuyInputs:
     return CoreBuyInputs(**values)
 
 
-def test_core_uses_monthly_dca_for_the_first_or_overdue_purchase() -> None:
-    decision = evaluate_core_buy(inputs())
+def test_core_scales_monthly_dca_down_when_rsi_is_elevated() -> None:
+    warm = evaluate_core_buy(inputs(rsi14=Decimal("60")))
+    hot = evaluate_core_buy(inputs(rsi14=Decimal("68")))
+    normal = evaluate_core_buy(inputs(rsi14=Decimal("48")))
 
-    assert decision.code == "monthly"
-    assert decision.fraction == Decimal("0.10")
-    assert decision.strategy_amount == Decimal("5000.00")
-    assert decision.executable_amount == Decimal("5000.00")
-    assert decision.shares == Decimal("10.0000")
+    assert (warm.code, warm.fraction, warm.strategy_amount) == (
+        "monthly", Decimal("0.05"), Decimal("2500.00")
+    )
+    assert (hot.code, hot.fraction, hot.strategy_amount) == (
+        "monthly", Decimal("0.025"), Decimal("1250.00")
+    )
+    assert (normal.code, normal.fraction, normal.strategy_amount) == (
+        "monthly", Decimal("0.10"), Decimal("5000.00")
+    )
 
 
 def test_core_selects_only_the_highest_active_pullback_tier() -> None:
@@ -42,7 +49,7 @@ def test_core_selects_only_the_highest_active_pullback_tier() -> None:
     correction = evaluate_core_buy(
         inputs(drawdown=Decimal("0.10"), rsi14=Decimal("48"))
     )
-    deep = evaluate_core_buy(inputs(vix=Decimal("31")))
+    deep = evaluate_core_buy(inputs(drawdown=Decimal("0.16")))
 
     assert (pullback.code, pullback.fraction) == ("pullback", Decimal("0.20"))
     assert (correction.code, correction.fraction) == (
@@ -50,6 +57,41 @@ def test_core_selects_only_the_highest_active_pullback_tier() -> None:
         Decimal("0.30"),
     )
     assert (deep.code, deep.fraction) == ("deep", Decimal("0.40"))
+
+
+def test_core_combines_daily_drop_rsi_and_drawdown_into_opportunity_tiers() -> None:
+    pullback = evaluate_core_buy(
+        inputs(daily_change=Decimal("-0.012"), rsi14=Decimal("48"))
+    )
+    correction = evaluate_core_buy(
+        inputs(
+            daily_change=Decimal("-0.021"),
+            drawdown=Decimal("0.03"),
+            rsi14=Decimal("44"),
+        )
+    )
+    deep = evaluate_core_buy(
+        inputs(
+            daily_change=Decimal("-0.011"),
+            drawdown=Decimal("0.06"),
+            rsi14=Decimal("29"),
+        )
+    )
+
+    assert (pullback.code, pullback.signal_score) == ("pullback", 2)
+    assert (correction.code, correction.signal_score) == ("correction", 4)
+    assert (deep.code, deep.signal_score) == ("deep", 6)
+
+
+def test_core_halves_staged_buy_below_ma200_for_two_days() -> None:
+    decision = evaluate_core_buy(
+        inputs(drawdown=Decimal("0.10"), below_ma200_two_days=True)
+    )
+
+    assert decision.code == "correction"
+    assert decision.trend_reduced is True
+    assert decision.fraction == Decimal("0.15")
+    assert decision.strategy_amount == Decimal("7500.00")
 
 
 def test_core_caps_executable_amount_by_funding_and_reports_shortfall() -> None:
@@ -107,6 +149,7 @@ def asset(symbol: str, **overrides) -> CoreAssetInputs:
         "current_value": Decimal("0"),
         "price": Decimal("500"),
         "drawdown": Decimal("0"),
+        "daily_change": Decimal("0"),
         "rsi14": Decimal("55"),
         "ma200": Decimal("450"),
         "below_ma200_two_days": False,
@@ -159,7 +202,7 @@ def test_core_portfolio_routes_new_money_to_voo_after_confirmed_relative_gap() -
     assert decision.selected_symbol == "VOO"
     assert decision.recommendation is not None
     assert decision.recommendation.actionable is True
-    assert decision.recommendation.strategy_amount == Decimal("5500.00")
+    assert decision.recommendation.strategy_amount == Decimal("2750.00")
     assert decision.mode == "accumulating"
 
 

@@ -67,20 +67,19 @@ function CoreRelativeBoard({ decision }: { decision: CoreStrategyDecision | null
   const assets = decision?.assets ?? []
   return <section className="core-relative-board" aria-label="核心仓相对状态">
     <header><div><p>RELATIVE ROUTING</p><h2>BRK.B / VOO 相对状态</h2></div><span>{decision ? `Z ${formatSigned(decision.ratio_z, 2)} · 路由确认 ${decision.route_confirmation_days} 日` : '等待刷新行情'}</span></header>
-    <div className="core-asset-head" aria-hidden="true"><span>标的 / 当前市值</span><span>价格趋势</span><span>回撤与 RSI</span><span>相对表现</span><span>当前档位</span></div>
+    <div className="core-asset-head" aria-hidden="true"><span>标的 / 当前市值</span><span>价格趋势</span><span>日跌 / 回撤 / RSI</span><span>相对表现</span><span>当前档位</span></div>
     {assets.map((asset) => <CoreAssetRow asset={asset} selected={decision?.selected_symbol === asset.symbol} totalValue={decision?.total_value ?? 0} key={asset.symbol} />)}
     {!assets.length && <div className="core-relative-empty"><BarChart3 size={19} />刷新行情后计算两只标的的相对偏离</div>}
   </section>
 }
 
 function CoreAssetRow({ asset, selected, totalValue }: { asset: CoreAssetDecision; selected: boolean; totalValue: number }) {
-  const labels: Record<string, string> = { monthly: '常规定投', pullback: '普通回调', correction: '明显调整', deep: '深度回撤', cooldown: '冷却期', waiting: '等待', at_target: '目标已满' }
   return <article className={`core-asset-row ${selected ? 'selected' : ''}`} aria-label={`${asset.symbol} 核心仓状态`}>
     <div><b>{asset.symbol}</b><strong>{formatMoney(asset.current_value)}</strong><small>当前占核心仓 {totalValue > 0 ? `${(asset.current_value / totalValue * 100).toFixed(1)}%` : '0.0%'}</small></div>
     <div><span>现价 / MA200</span><strong>{formatMoney(asset.price)} / {formatMoney(asset.ma200)}</strong><small>{asset.below_ma200_two_days ? '连续两日低于 MA200' : '未触发趋势保护'}</small></div>
-    <div><span>回撤 / RSI14</span><strong>{formatPercent(-asset.drawdown)} / {asset.rsi14.toFixed(1)}</strong><small>{asset.drawdown >= .05 ? '进入回调观察区' : '常规波动'}</small></div>
+    <div><span>日涨跌 / 回撤 / RSI14</span><strong>{formatPercent(asset.daily_change)} / {formatPercent(-asset.drawdown)} / {asset.rsi14.toFixed(1)}</strong><small>{(asset.signal_score ?? 0) > 0 ? `机会积分 ${asset.signal_score} / 6` : '暂未积累回调分数'}</small></div>
     <div><span>20 日 / 半年</span><strong>{formatPercent(asset.return_20d)} / {formatPercent(asset.return_126d)}</strong><small>用于相对路由与满仓轮换</small></div>
-    <div><span>信号档位</span><strong>{labels[asset.code] ?? asset.code}</strong><small>{selected ? '当前优先标的' : '本次未选中'}</small></div>
+    <div><span>信号档位</span><strong>{coreBuyLabel(asset)}</strong><small>{selected ? '当前优先标的' : '本次未选中'}</small></div>
   </article>
 }
 
@@ -89,11 +88,11 @@ function CoreBuySignal({ decision }: { decision: CoreStrategyDecision | null }) 
   if (!decision) return <section className="core-signal waiting" aria-label="核心仓买入建议"><Gauge size={19} /><div><span>等待行情</span><strong>刷新后计算新增资金优先标的</strong></div></section>
   if (decision.mode === 'full') return <section className="core-signal waiting" aria-label="核心仓买入建议"><Gauge size={19} /><div><span>核心仓已满</span><strong>暂停普通定投，转入满仓轮换监控</strong><small>满仓阈值 {formatMoney(decision.full_threshold)}</small></div></section>
   if (!recommendation) return <section className="core-signal waiting" aria-label="核心仓买入建议"><Gauge size={19} /><div><span>等待</span><strong>当前没有可执行的新增买入建议</strong></div></section>
-  const labels: Record<string, string> = { monthly: '常规定投', pullback: '普通回调', correction: '明显调整', deep: '深度回撤', cooldown: '冷却期', waiting: '等待', at_target: '已达目标' }
+  const amountNote = `${recommendation.trend_reduced ? '趋势保护减半 · ' : ''}使用目标缺口的 ${(recommendation.fraction * 100).toFixed(1)}%${recommendation.cash_required > 0 ? ` · 需从现金转入 ${formatMoney(recommendation.cash_required)}` : ''}`
   return <section className={`core-signal ${recommendation.actionable ? 'actionable' : 'waiting'}`} aria-label="核心仓买入建议">
     <TrendingUp size={20} />
-    <div><span>{labels[recommendation.code]} · {recommendation.symbol}</span><strong>{recommendation.actionable ? `下一笔优先买入 ${recommendation.symbol}` : '当前无需新增买入'}</strong><small>相对 Z {formatSigned(decision.ratio_z, 2)} · 回撤 {(recommendation.drawdown * 100).toFixed(1)}% · RSI {recommendation.rsi14.toFixed(1)}</small></div>
-    <div><span>建议金额</span><strong>{formatMoney(recommendation.executable_amount)}</strong><small>{recommendation.cash_required > 0 ? `需从现金转入 ${formatMoney(recommendation.cash_required)}` : '核心本金可以覆盖'}</small></div>
+    <div><span>{coreBuyLabel(recommendation)} · {recommendation.symbol}</span><strong>{recommendation.actionable ? `下一笔优先买入 ${recommendation.symbol}` : '当前无需新增买入'}</strong><small>日涨跌 {formatPercent(recommendation.daily_change)} · 回撤 {formatPercent(-recommendation.drawdown)} · RSI {recommendation.rsi14.toFixed(1)}</small></div>
+    <div><span>建议金额</span><strong>{formatMoney(recommendation.executable_amount)}</strong><small>{amountNote}</small></div>
     <div><span>估算数量</span><strong>约 {recommendation.shares.toFixed(4)} 股</strong><small>按 {formatMoney(recommendation.price)}</small></div>
   </section>
 }
@@ -125,5 +124,11 @@ function numberedLots(lots: Position[]) {
     .reverse()
 }
 
-function formatPercent(value: number) { return `${value >= 0 ? '+' : ''}${(value * 100).toFixed(1)}%` }
+function formatPercent(value: number | null | undefined) { return value == null || !Number.isFinite(value) ? '—' : `${value >= 0 ? '+' : ''}${(value * 100).toFixed(1)}%` }
 function formatSigned(value: number, digits: number) { return `${value >= 0 ? '+' : ''}${value.toFixed(digits)}` }
+function coreBuyLabel(asset: Pick<CoreAssetDecision, 'code' | 'fraction'>) {
+  if (asset.code === 'monthly' && asset.fraction <= .025) return '高位极轻定投'
+  if (asset.code === 'monthly' && asset.fraction <= .05) return '高位轻仓定投'
+  const labels: Record<string, string> = { monthly: '常规定投', pullback: '普通回调', correction: '明显调整', deep: '深度回撤', cooldown: '冷却期', waiting: '等待', at_target: '目标已满' }
+  return labels[asset.code] ?? asset.code
+}

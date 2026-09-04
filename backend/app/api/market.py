@@ -360,6 +360,7 @@ def refresh(
                 ),
                 price=symbol_price,
                 drawdown=drawdown_from_high(closes),
+                daily_change=(closes[-1] / closes[-2] - Decimal("1")),
                 rsi14=wilder_rsi(closes),
                 ma200=ma200,
                 below_ma200_two_days=(
@@ -422,7 +423,13 @@ def refresh(
         signal_service.emit(
             f"core_buy_{core_signal.symbol.lower().replace('.', '_')}",
             f"{core_signal.symbol} 核心仓买入建议",
-            f"{core_signal.symbol} 当前为核心仓相对优先缺口，建议金额 {core_signal.executable_amount}。",
+            (
+                f"{core_signal.symbol} 当前为核心仓相对优先缺口，建议金额 "
+                f"{core_signal.executable_amount}；单日涨跌 "
+                f"{(core_signal.daily_change * Decimal('100')).quantize(Decimal('0.1'))}%、"
+                f"回撤 {(core_signal.drawdown * Decimal('100')).quantize(Decimal('0.1'))}%、"
+                f"RSI14 {core_signal.rsi14.quantize(Decimal('0.1'))}。"
+            ),
             "opportunity",
             market_date,
             stale=stale,

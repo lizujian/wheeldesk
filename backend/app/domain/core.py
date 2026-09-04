@@ -12,6 +12,10 @@ TIER_FRACTIONS = {
     "correction": Decimal("0.30"),
     "deep": Decimal("0.40"),
 }
+MONTHLY_FRACTIONS = (
+    (Decimal("65"), Decimal("0.025")),
+    (Decimal("50"), Decimal("0.05")),
+)
 TIER_RANK = {"monthly": 1, "pullback": 2, "correction": 3, "deep": 4}
 CORE_SYMBOLS = ("BRK.B", "VOO")
 
@@ -21,12 +25,14 @@ class CoreBuyInputs:
     as_of: date
     price: Decimal
     drawdown: Decimal
+    daily_change: Decimal
     rsi14: Decimal
     vix: Decimal
     target_gap: Decimal
     available_funding: Decimal
     last_purchase_date: date | None
     last_purchase_tier: str | None
+    below_ma200_two_days: bool = False
 
 
 @dataclass(frozen=True)
@@ -38,6 +44,8 @@ class CoreBuyDecision:
     executable_amount: Decimal
     funding_required: Decimal
     shares: Decimal
+    signal_score: int
+    trend_reduced: bool
 
 
 @dataclass(frozen=True)
@@ -46,6 +54,7 @@ class CoreAssetInputs:
     current_value: Decimal
     price: Decimal
     drawdown: Decimal
+    daily_change: Decimal
     rsi14: Decimal
     ma200: Decimal
     below_ma200_two_days: bool
@@ -61,6 +70,7 @@ class CoreAssetDecision:
     current_value: Decimal
     price: Decimal
     drawdown: Decimal
+    daily_change: Decimal
     rsi14: Decimal
     ma200: Decimal
     below_ma200_two_days: bool
@@ -73,6 +83,8 @@ class CoreAssetDecision:
     executable_amount: Decimal
     funding_required: Decimal
     shares: Decimal
+    signal_score: int
+    trend_reduced: bool
 
 
 @dataclass(frozen=True)
@@ -110,7 +122,8 @@ def evaluate_core_buy(inputs: CoreBuyInputs) -> CoreBuyDecision:
     if inputs.target_gap <= ZERO:
         return _empty("at_target")
 
-    code = _opportunity_tier(inputs)
+    signal_score = _opportunity_score(inputs)
+    code = _opportunity_tier(inputs, signal_score)
     if code is None:
         if inputs.last_purchase_date is None or _business_days_between(
             inputs.last_purchase_date, inputs.as_of
@@ -127,7 +140,14 @@ def evaluate_core_buy(inputs: CoreBuyInputs) -> CoreBuyDecision:
     ):
         return _empty("cooldown")
 
-    fraction = TIER_FRACTIONS[code]
+    fraction = (
+        _monthly_fraction(inputs.rsi14)
+        if code == "monthly"
+        else TIER_FRACTIONS[code]
+    )
+    trend_reduced = inputs.below_ma200_two_days
+    if trend_reduced:
+        fraction /= Decimal("2")
     strategy_amount = (inputs.target_gap * fraction).quantize(CENT)
     executable_amount = min(strategy_amount, max(inputs.available_funding, ZERO)).quantize(
         CENT
@@ -146,6 +166,8 @@ def evaluate_core_buy(inputs: CoreBuyInputs) -> CoreBuyDecision:
         executable_amount=executable_amount,
         funding_required=funding_required,
         shares=shares,
+        signal_score=signal_score,
+        trend_reduced=trend_reduced,
     )
 
 
@@ -229,12 +251,14 @@ def _evaluate_asset(
             as_of=as_of,
             price=asset.price,
             drawdown=asset.drawdown,
+            daily_change=asset.daily_change,
             rsi14=asset.rsi14,
             vix=vix,
             target_gap=target_gap,
             available_funding=available_funding,
             last_purchase_date=asset.last_purchase_date,
             last_purchase_tier=asset.last_purchase_tier,
+            below_ma200_two_days=asset.below_ma200_two_days,
         )
     )
     return CoreAssetDecision(
@@ -242,6 +266,7 @@ def _evaluate_asset(
         current_value=asset.current_value,
         price=asset.price,
         drawdown=asset.drawdown,
+        daily_change=asset.daily_change,
         rsi14=asset.rsi14,
         ma200=asset.ma200,
         below_ma200_two_days=asset.below_ma200_two_days,
@@ -254,6 +279,8 @@ def _evaluate_asset(
         executable_amount=decision.executable_amount,
         funding_required=decision.funding_required,
         shares=decision.shares,
+        signal_score=decision.signal_score,
+        trend_reduced=decision.trend_reduced,
     )
 
 
@@ -395,14 +422,51 @@ def consecutive_extreme(values: list[Decimal], threshold: Decimal) -> int:
     return count
 
 
-def _opportunity_tier(inputs: CoreBuyInputs) -> str | None:
-    if inputs.drawdown >= Decimal("0.15") or inputs.vix >= Decimal("30"):
+def _opportunity_score(inputs: CoreBuyInputs) -> int:
+    score = 0
+    if inputs.drawdown >= Decimal("0.15"):
+        score += 6
+    elif inputs.drawdown >= Decimal("0.10"):
+        score += 4
+    elif inputs.drawdown >= Decimal("0.05"):
+        score += 2
+    elif inputs.drawdown >= Decimal("0.03"):
+        score += 1
+
+    if inputs.rsi14 < Decimal("30"):
+        score += 3
+    elif inputs.rsi14 < Decimal("40"):
+        score += 2
+    elif inputs.rsi14 < Decimal("50"):
+        score += 1
+
+    if inputs.daily_change <= Decimal("-0.04"):
+        score += 3
+    elif inputs.daily_change <= Decimal("-0.02"):
+        score += 2
+    elif inputs.daily_change <= Decimal("-0.01"):
+        score += 1
+
+    if inputs.vix >= Decimal("30"):
+        score += 1
+    return score
+
+
+def _opportunity_tier(inputs: CoreBuyInputs, score: int) -> str | None:
+    if score >= 6:
         return "deep"
-    if inputs.drawdown >= Decimal("0.10") or inputs.rsi14 < Decimal("40"):
+    if score >= 4:
         return "correction"
-    if inputs.drawdown >= Decimal("0.05") and inputs.rsi14 < Decimal("50"):
+    if score >= 2:
         return "pullback"
     return None
+
+
+def _monthly_fraction(rsi14: Decimal) -> Decimal:
+    for threshold, fraction in MONTHLY_FRACTIONS:
+        if rsi14 >= threshold:
+            return fraction
+    return TIER_FRACTIONS["monthly"]
 
 
 def _business_days_between(start: date, end: date) -> int:
@@ -416,4 +480,4 @@ def _business_days_between(start: date, end: date) -> int:
 
 
 def _empty(code: str) -> CoreBuyDecision:
-    return CoreBuyDecision(code, False, ZERO, ZERO, ZERO, ZERO, ZERO)
+    return CoreBuyDecision(code, False, ZERO, ZERO, ZERO, ZERO, ZERO, 0, False)

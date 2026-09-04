@@ -193,6 +193,7 @@ export interface CoreAssetDecision {
   price: number
   rsi14: number
   drawdown: number
+  daily_change?: number
   ma200: number
   below_ma200_two_days: boolean
   return_20d: number
@@ -204,6 +205,8 @@ export interface CoreAssetDecision {
   executable_amount: number
   funding_required: number
   shares: number
+  signal_score?: number
+  trend_reduced?: boolean
 }
 
 export interface CoreStrategyDecision {

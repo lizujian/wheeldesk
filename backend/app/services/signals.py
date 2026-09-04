@@ -33,6 +33,17 @@ class SignalService:
             )
         )
         if existing is not None:
+            changed = (
+                existing.title != title
+                or existing.message != message
+                or existing.severity != severity
+            )
+            if changed:
+                existing.title = title
+                existing.message = message
+                existing.severity = severity
+                existing.acknowledged = False
+                self.session.commit()
             return existing
         signal = SignalRecord(
             code=code,

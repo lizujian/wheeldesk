@@ -51,6 +51,33 @@ def test_same_signal_on_same_market_date_is_deduplicated(service: SignalService)
     assert count == 1
 
 
+def test_same_day_signal_refreshes_changed_content_and_becomes_active(
+    service: SignalService,
+) -> None:
+    first = service.emit(
+        "core_buy_brk_b",
+        "BRK.B 核心仓买入建议",
+        "建议金额 10000",
+        "opportunity",
+        date(2026, 7, 9),
+    )
+    service.acknowledge(first.id)
+
+    refreshed = service.emit(
+        "core_buy_brk_b",
+        "BRK.B 高位轻仓定投",
+        "建议金额 5000",
+        "opportunity",
+        date(2026, 7, 9),
+    )
+
+    assert refreshed.id == first.id
+    assert refreshed.title == "BRK.B 高位轻仓定投"
+    assert refreshed.message == "建议金额 5000"
+    assert refreshed.acknowledged is False
+    assert service.list_active() == [refreshed]
+
+
 def test_critical_signals_sort_before_lower_severity(service: SignalService) -> None:
     service.emit("vix_high", "VIX 高位", "评估现金储备", "warning", date(2026, 7, 9))
     service.emit("ma200_break", "跌破牛熊分界线", "立即评估止损", "critical", date(2026, 7, 9))

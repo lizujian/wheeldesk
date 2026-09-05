@@ -82,7 +82,7 @@ export default function App() {
       {market && <SignalBanner risk={market.risk} />}
       <Suspense fallback={<div className="page-loading">正在加载...</div>}><Routes>
         <Route path="/" element={<OverviewPage portfolio={portfolio} profitSummary={profitLedger.summary} onInitialize={async (payload) => { setPortfolio(await api.initialize(payload)); await load() }} onAction={action} />} />
-        <Route path="/core" element={<CorePage portfolio={portfolio} market={market} positions={positions} />} />
+        <Route path="/core" element={<CorePage portfolio={portfolio} market={market} positions={positions} overview={wheel} />} />
         <Route path="/wheel" element={<WheelPage market={market} overview={wheel} />} />
         <Route path="/wheel/history" element={<WheelHistoryPage overview={wheel} />} />
         <Route path="/leaps" element={<LeapsPage market={market} positions={positionHistory} portfolio={portfolio} />} />

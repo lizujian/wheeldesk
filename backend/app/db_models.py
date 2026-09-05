@@ -82,6 +82,9 @@ class WheelPutLot(Base):
         ForeignKey("wheel_put_lots.id"), nullable=True, unique=True, index=True
     )
     symbol: Mapped[str] = mapped_column(String(20), default="TQQQ", server_default="TQQQ", index=True)
+    capital_bucket: Mapped[str] = mapped_column(
+        String(20), default="wheel", server_default="wheel", index=True
+    )
     batch_number: Mapped[int] = mapped_column(Integer, index=True)
     trade_date: Mapped[date] = mapped_column(Date, index=True)
     expiration: Mapped[date] = mapped_column(Date, index=True)

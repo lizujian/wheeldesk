@@ -85,6 +85,7 @@ def initialize_database(selected_engine: Engine = engine) -> None:
     }
     wheel_put_additions = {
         "symbol": "VARCHAR(20) NOT NULL DEFAULT 'TQQQ'",
+        "capital_bucket": "VARCHAR(20) NOT NULL DEFAULT 'wheel'",
         "earnings_confirmed": "BOOLEAN NOT NULL DEFAULT 0",
         "rolled_from_put_id": "INTEGER REFERENCES wheel_put_lots(id)",
     }

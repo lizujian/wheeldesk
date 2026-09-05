@@ -273,6 +273,46 @@ def test_put_close_sends_realized_profit_to_cash_without_growing_wheel_budget(
     assert service.session.get(BucketBalance, "wheel").amount == Decimal("100000.00")
 
 
+def test_core_accumulation_put_uses_core_capital_and_never_enters_the_wheel() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        session.add_all(
+            [
+                BucketBalance(bucket="core", amount=Decimal("60000")),
+                BucketBalance(bucket="cash", amount=Decimal("10000")),
+                BucketBalance(bucket="wheel", amount=Decimal("20000")),
+                BucketBalance(bucket="leaps", amount=Decimal("25000")),
+            ]
+        )
+        session.commit()
+        service = WheelPortfolioService(session)
+
+        put = service.open_put(
+            batch_number=1,
+            trade_date=date(2026, 9, 4),
+            expiration=date(2026, 10, 2),
+            strike=Decimal("500"),
+            premium=Decimal("4.65"),
+            quantity=1,
+            entry_tqqq_price=Decimal("0"),
+            symbol="BRK.B",
+            capital_bucket="core",
+            broker_reconciled=True,
+        )
+
+        assert service.overview()["rounds"] == []
+        assert service.overview()["core_puts"][0]["collateral"] == Decimal("50000.00")
+        with pytest.raises(ValueError, match="IBKR 股票持仓快照"):
+            service.assign_put(put.id, date(2026, 10, 2), 1)
+
+        service.close_put(put.id, date(2026, 9, 18), Decimal("1.65"))
+
+        assert session.get(BucketBalance, "cash").amount == Decimal("10300.00")
+        assert session.get(BucketBalance, "core").amount == Decimal("60000.00")
+        assert session.get(BucketBalance, "wheel").amount == Decimal("20000.00")
+
+
 def test_put_loss_reduces_wheel_instead_of_cash(service: WheelPortfolioService) -> None:
     put = open_first(service)
 

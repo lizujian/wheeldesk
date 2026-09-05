@@ -217,6 +217,53 @@ Open Positions,Data,Summary,Stocks,USD,VOO,,12.5,1,590,7375,600,7500,125,,,,
         assert position["bucket"] == "core"
 
 
+def test_ibkr_import_classifies_brk_puts_as_core_accumulation() -> None:
+    report = '''Statement,Header,Field Name,Field Value
+Statement,Data,Period,"September 4, 2026"
+Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,Code
+Trades,Data,Order,Equity and Index Options,USD,BRK B 18SEP26 500 P,"2026-09-04, 12:54:47",-1,2.75,2.64,275,0,-275,0,11,O
+Trades,Data,Order,Equity and Index Options,USD,BRK B 02OCT26 500 P,"2026-09-04, 15:53:42",-1,4.65,4.55,465,0,-465,0,10,O
+Open Positions,Header,DataDiscriminator,Asset Category,Currency,Symbol,Quantity,Mult,Cost Price,Cost Basis,Close Price,Value,Unrealized P/L
+Open Positions,Data,Summary,Equity and Index Options,USD,BRK B 18SEP26 500 P,-1,100,2.75,-275,2.64,-264,11
+Open Positions,Data,Summary,Equity and Index Options,USD,BRK B 02OCT26 500 P,-1,100,4.65,-465,4.55,-455,10
+'''
+    with import_client() as client:
+        preview = client.post(
+            "/api/imports/ibkr/preview",
+            json={"filename": "brk-core-puts.csv", "content": report},
+        ).json()
+
+        puts = [row for row in preview["rows"] if row["action"] == "create_wheel_put"]
+        assert len(puts) == 2
+        assert all(row["status"] == "ready" for row in puts)
+        assert all(row["details"]["capital_bucket"] == "core" for row in puts)
+
+        imported = client.post(
+            "/api/imports/ibkr/auto",
+            json={"filename": "brk-core-puts.csv", "content": report},
+        )
+        assert imported.status_code == 200, imported.text
+        assert imported.json()["imported"] == 2
+        assert imported.json()["needs_attention"] == 0
+
+        wheel = client.get("/api/wheel/overview").json()
+        assert wheel["rounds"] == []
+        assert wheel["capital"]["put_collateral"] == 0.0
+        assert len(wheel["core_puts"]) == 2
+        assert {row["expiration"] for row in wheel["core_puts"]} == {
+            "2026-09-18",
+            "2026-10-02",
+        }
+        assert sum(row["collateral"] for row in wheel["core_puts"]) == 100000.0
+
+        portfolio = client.get("/api/portfolio/summary").json()
+        assert portfolio["capital"]["core"]["committed"] == 100000.0
+        assert portfolio["capital"]["core"]["cash_occupancy"] == 44000.0
+        assert portfolio["capital"]["wheel"]["committed"] == 0.0
+        assert portfolio["capital"]["cash"]["occupied"] == 44000.0
+        assert portfolio["capital"]["cash"]["margin_shortfall"] == 39000.0
+
+
 def test_localized_statement_normalizes_headers_and_skips_aggregate_rows() -> None:
     with import_client() as client:
         preview_response = client.post(

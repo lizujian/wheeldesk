@@ -1,7 +1,7 @@
 import { render, screen, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 
-import type { CoreStrategyDecision, MarketSnapshot, PortfolioSummary, Position } from '../lib/types'
+import type { CoreStrategyDecision, MarketSnapshot, PortfolioSummary, Position, WheelOverview, WheelPutLot } from '../lib/types'
 import { CorePage } from './CorePage'
 
 const portfolio: PortfolioSummary = {
@@ -59,9 +59,33 @@ const positions: Position[] = [
   { id: 3, bucket: 'core', symbol: 'VOO', asset_type: 'equity', quantity: 4, multiplier: 1, entry_price: 550, current_price: 600, current_value: 2400, unrealized_profit: 200, opened_on: '2026-07-05', expiration: null, strike: null, delta: null, tranche: null, status: 'open', total_loss_impact: null },
 ]
 
+function corePut(id: number, expiration: string, premium: number): WheelPutLot {
+  return {
+    id, round_id: id, capital_bucket: 'core', symbol: 'BRK.B', batch_number: 1,
+    trade_date: '2026-09-04', expiration, strike: 500, premium, quantity: 1,
+    open_quantity: 1, assigned_contracts: 0, entry_tqqq_price: 506.03,
+    earnings_confirmed: false, state: 'open', closed_on: null, close_premium: null,
+    realized_profit: 0, collateral: 50000, opening_dte: expiration === '2026-09-18' ? 14 : 28,
+    opening_annualized_return: .12, early_close_days: null, early_close_annualized_return: null,
+    early_close_return_kind: null, quote_source: null, quote_bid: null, quote_ask: null,
+    quote_last: null, quote_iv: null, quote_as_of: null, theoretical_low: null,
+    theoretical_base: null, theoretical_high: null, captured_fraction: null,
+    early_close_code: null, early_close_message: null, voided_at: null, void_reason: null,
+    share_lots: [],
+  }
+}
+
+const wheel: WheelOverview = {
+  budget: { budget: 39000, target_fraction: .39, funded: 39000, funding_gap: 0, funding_excess: 0, unfunded_exposure: 0, exposure: 0, available: 39000, over_budget: 0, usage_fraction: 0 },
+  recommendations: { first: 23400, second: 15600 },
+  realized_profit: 0,
+  rounds: [],
+  core_puts: [corePut(21, '2026-09-18', 2.75), corePut(22, '2026-10-02', 4.65)],
+}
+
 describe('core equity page', () => {
   it('shows the combined core budget and both strategy assets', () => {
-    render(<CorePage portfolio={portfolio} market={market} positions={positions} />)
+    render(<CorePage portfolio={portfolio} market={market} positions={positions} overview={wheel} />)
 
     expect(screen.getByText('核心仓目标预算')).toBeInTheDocument()
     expect(screen.getByText('总资产动态目标 50.0%')).toBeInTheDocument()
@@ -73,6 +97,10 @@ describe('core equity page', () => {
     expect(screen.getByText('-1.8% / -6.0% / 44.0')).toBeInTheDocument()
     expect(screen.getByText('机会积分 4 / 6')).toBeInTheDocument()
     expect(screen.getByText('第 1 笔 · 2026-07-05')).toBeInTheDocument()
+    expect(screen.getByText('核心仓 Sell Put 建仓')).toBeInTheDocument()
+    expect(screen.getByText('2026-09-18')).toBeInTheDocument()
+    expect(screen.getByText('2026-10-02')).toBeInTheDocument()
+    expect(screen.getByText('$100,000.00')).toBeInTheDocument()
   })
 
   it('does not expose manual position mutation controls', () => {

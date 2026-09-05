@@ -202,7 +202,11 @@ def refresh(
         "candidate": fifo_candidate if len(used_tranches) >= 5 and base_entry_ready else None,
     }
     club_market_states, club_unavailable = _load_club_markets(provider, market_date)
-    wheel_spots = {"TQQQ": tqqq_spot}
+    wheel_spots = {
+        "TQQQ": tqqq_spot,
+        "BRK.B": series["BRK.B"].bars[-1].close,
+        "VOO": series["VOO"].bars[-1].close,
+    }
     wheel_spots.update(
         {
             state.symbol: state.current_price or state.close
@@ -250,6 +254,7 @@ def refresh(
             .join(WheelRound, WheelPutLot.round_id == WheelRound.id)
             .where(
                 WheelPutLot.symbol != "TQQQ",
+                WheelPutLot.capital_bucket == Bucket.WHEEL.value,
                 WheelPutLot.state != "voided",
                 WheelRound.status == "active",
             )
@@ -280,6 +285,7 @@ def refresh(
         session.scalars(
             select(WheelPutLot.trade_date).where(
                 WheelPutLot.symbol != "TQQQ",
+                WheelPutLot.capital_bucket == Bucket.WHEEL.value,
                 WheelPutLot.state != "voided",
             )
         )

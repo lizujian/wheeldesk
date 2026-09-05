@@ -17,6 +17,7 @@ from app.domain.wheel_portfolio import (
     budget_status,
     recommend_batches,
 )
+from app.domain.core import CORE_SYMBOLS
 from app.domain.models import Bucket
 from app.domain.trillion_club import is_wheel_club_symbol
 from app.services.portfolio_store import PortfolioStore
@@ -42,21 +43,28 @@ class WheelPortfolioService:
         entry_tqqq_price: Decimal,
         round_id: int | None = None,
         symbol: str = "TQQQ",
+        capital_bucket: str = Bucket.WHEEL.value,
         earnings_confirmed: bool = False,
         broker_reconciled: bool = False,
     ) -> WheelPutLot:
         symbol = symbol.upper()
+        capital_bucket = capital_bucket.lower()
         self._validate_option(trade_date, expiration, strike, premium, quantity)
-        if symbol != "TQQQ" and not is_wheel_club_symbol(symbol):
+        is_core_put = capital_bucket == Bucket.CORE.value
+        if capital_bucket not in {Bucket.CORE.value, Bucket.WHEEL.value}:
+            raise ValueError("Sell Put 资金归属只允许核心仓或车轮策略")
+        if is_core_put and symbol not in CORE_SYMBOLS:
+            raise ValueError("核心仓 Sell Put 只允许 BRK.B 或 VOO")
+        if not is_core_put and symbol != "TQQQ" and not is_wheel_club_symbol(symbol):
             raise ValueError("车轮标的只允许 TQQQ 或万亿俱乐部车轮候选股票")
-        if symbol != "TQQQ" and not earnings_confirmed and not broker_reconciled:
+        if not is_core_put and symbol != "TQQQ" and not earnings_confirmed and not broker_reconciled:
             raise ValueError("个股 Sell Put 需要确认到期日前无财报")
-        if symbol != "TQQQ" and self.has_exposure(symbol) and round_id is None and not broker_reconciled:
+        if not is_core_put and symbol != "TQQQ" and self.has_exposure(symbol) and round_id is None and not broker_reconciled:
             raise ValueError(f"{symbol} 已有活动车轮周期")
         if batch_number not in (1, 2):
             raise ValueError("车轮批次只能是第一批或第二批")
-        if symbol != "TQQQ" and batch_number != 1:
-            raise ValueError("万亿俱乐部个股车轮不拆分第二批")
+        if (is_core_put or symbol != "TQQQ") and batch_number != 1:
+            raise ValueError("个股 Sell Put 不拆分第二批")
         if round_id is None:
             if batch_number != 1:
                 raise ValueError("第二批必须关联已有轮次")
@@ -87,6 +95,7 @@ class WheelPortfolioService:
         record = WheelPutLot(
             round_id=round_record.id,
             symbol=symbol,
+            capital_bucket=capital_bucket,
             batch_number=batch_number,
             trade_date=trade_date,
             expiration=expiration,
@@ -151,7 +160,9 @@ class WheelPortfolioService:
         record.closed_on = closed_on
         record.close_premium = buyback_premium
         self._refresh_round(record.round_id)
-        self._post_profit(f"wheel-put:{record.id}", profit, closed_on)
+        self._post_profit(
+            f"wheel-put:{record.id}", profit, closed_on, record.capital_bucket
+        )
         self.session.commit()
         return record
 
@@ -194,6 +205,7 @@ class WheelPortfolioService:
             round_id=previous.round_id,
             rolled_from_put_id=previous.id,
             symbol=previous.symbol,
+            capital_bucket=previous.capital_bucket,
             batch_number=previous.batch_number,
             trade_date=rolled_on,
             expiration=expiration,
@@ -210,7 +222,9 @@ class WheelPortfolioService:
         self.session.add(next_put)
         self.session.flush()
         self._refresh_round(previous.round_id)
-        self._post_profit(f"wheel-put:{previous.id}", profit, rolled_on)
+        self._post_profit(
+            f"wheel-put:{previous.id}", profit, rolled_on, previous.capital_bucket
+        )
         self.session.commit()
         return next_put
 
@@ -223,12 +237,16 @@ class WheelPortfolioService:
         record.closed_on = expired_on
         record.close_premium = ZERO
         self._refresh_round(record.round_id)
-        self._post_profit(f"wheel-put:{record.id}", profit, expired_on)
+        self._post_profit(
+            f"wheel-put:{record.id}", profit, expired_on, record.capital_bucket
+        )
         self.session.commit()
         return record
 
     def assign_put(self, put_id: int, assigned_on: date, contracts: int) -> WheelShareLot:
         record = self._require_put_open(put_id)
+        if record.capital_bucket == Bucket.CORE.value:
+            raise ValueError("核心仓 Sell Put 行权请通过 IBKR 股票持仓快照同步")
         if contracts <= 0 or contracts > record.open_quantity:
             raise ValueError("行权合约数量无效")
         shares = contracts * 100
@@ -436,9 +454,15 @@ class WheelPortfolioService:
     def round_number(self, round_id: int) -> int:
         return self._round(round_id).number
 
-    def _post_profit(self, source_key: str, amount: Decimal, occurred_on: date) -> None:
+    def _post_profit(
+        self,
+        source_key: str,
+        amount: Decimal,
+        occurred_on: date,
+        capital_bucket: str = Bucket.WHEEL.value,
+    ) -> None:
         RealizedCashService(self.session).post(
-            source_key, Bucket.WHEEL, amount, occurred_on
+            source_key, Bucket(capital_bucket), amount, occurred_on
         )
 
     def _reverse_profit(self, source_key: str, reason: str) -> None:
@@ -486,12 +510,22 @@ class WheelPortfolioService:
         target_row = portfolio.get("targets", {}).get("options", {})
         strategy_budget = target_row.get("amount", ZERO)
         target_fraction = target_row.get("fraction", ZERO)
-        puts = list(self.session.scalars(select(WheelPutLot).where(WheelPutLot.state == "open")))
+        puts = list(
+            self.session.scalars(
+                select(WheelPutLot).where(
+                    WheelPutLot.state == "open",
+                    WheelPutLot.capital_bucket == Bucket.WHEEL.value,
+                )
+            )
+        )
         shares = list(
             self.session.scalars(
-                select(WheelShareLot).where(
+                select(WheelShareLot)
+                .join(WheelPutLot, WheelShareLot.put_lot_id == WheelPutLot.id)
+                .where(
                     WheelShareLot.state == "held",
                     WheelShareLot.remaining_quantity > 0,
+                    WheelPutLot.capital_bucket == Bucket.WHEEL.value,
                 )
             )
         )
@@ -504,15 +538,47 @@ class WheelPortfolioService:
         realized = sum(
             (
                 row.realized_profit
-                for model in (WheelPutLot, WheelCallLot)
                 for row in self.session.scalars(
-                    select(model).where(model.state != "voided")
+                    select(WheelPutLot).where(
+                        WheelPutLot.state != "voided",
+                        WheelPutLot.capital_bucket == Bucket.WHEEL.value,
+                    )
+                )
+            ),
+            ZERO,
+        )
+        realized += sum(
+            (
+                row.realized_profit
+                for row in self.session.scalars(
+                    select(WheelCallLot).where(WheelCallLot.state != "voided")
                 )
             ),
             ZERO,
         )
         rounds = list(
-            self.session.scalars(select(WheelRound).order_by(WheelRound.number.asc()))
+            self.session.scalars(
+                select(WheelRound)
+                .where(
+                    WheelRound.id.in_(
+                        select(WheelPutLot.round_id).where(
+                            WheelPutLot.capital_bucket == Bucket.WHEEL.value
+                        )
+                    )
+                )
+                .order_by(WheelRound.number.asc())
+            )
+        )
+        core_puts = list(
+            self.session.scalars(
+                select(WheelPutLot)
+                .where(
+                    WheelPutLot.capital_bucket == Bucket.CORE.value,
+                    WheelPutLot.state == "open",
+                    WheelPutLot.open_quantity > 0,
+                )
+                .order_by(WheelPutLot.expiration.asc(), WheelPutLot.id.asc())
+            )
         )
         funding_gap = max(strategy_budget - funded, ZERO).quantize(Decimal("0.01"))
         funding_excess = max(funded - strategy_budget, ZERO).quantize(Decimal("0.01"))
@@ -542,6 +608,7 @@ class WheelPortfolioService:
             "recommendations": asdict(recommendations),
             "realized_profit": realized.quantize(Decimal("0.01")),
             "rounds": [self._round_payload(record) for record in rounds],
+            "core_puts": [self._put_payload(record) for record in core_puts],
         }
 
     def _refresh_round(self, round_id: int) -> None:
@@ -687,6 +754,7 @@ class WheelPortfolioService:
             "id": record.id,
             "round_id": record.round_id,
             "symbol": record.symbol,
+            "capital_bucket": record.capital_bucket,
             "batch_number": record.batch_number,
             "trade_date": record.trade_date,
             "expiration": record.expiration,

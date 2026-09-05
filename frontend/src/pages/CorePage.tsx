@@ -1,17 +1,20 @@
-import { AlertTriangle, ArrowRightLeft, Banknote, BarChart3, CircleDollarSign, Gauge, Landmark, TrendingUp, WalletCards } from 'lucide-react'
+import { AlertTriangle, ArrowRightLeft, Banknote, BarChart3, CalendarClock, CircleDollarSign, Gauge, Landmark, ShieldCheck, TrendingUp, WalletCards } from 'lucide-react'
 
 import { formatMoney } from '../components/AllocationChart'
-import type { CoreAssetDecision, CoreStrategyDecision, MarketSnapshot, PortfolioSummary, Position } from '../lib/types'
+import type { CoreAssetDecision, CoreStrategyDecision, MarketSnapshot, PortfolioSummary, Position, WheelOverview, WheelPutLot } from '../lib/types'
 import './CorePage.css'
 
 const coreSymbols = new Set(['BRK.B', 'VOO'])
 
-export function CorePage({ portfolio, market, positions }: {
+export function CorePage({ portfolio, market, positions, overview }: {
   portfolio: PortfolioSummary
   market: MarketSnapshot | null
   positions: Position[]
+  overview?: WheelOverview
 }) {
   const lots = positions.filter((position) => position.bucket === 'core' && coreSymbols.has(position.symbol))
+  const corePuts = overview?.core_puts ?? []
+  const putCollateral = corePuts.reduce((total, put) => total + put.collateral, 0)
   const target = portfolio.targets?.core?.amount ?? 0
   const targetFraction = portfolio.targets?.core?.fraction ?? 0
   const funded = portfolio.balances?.core ?? 0
@@ -23,25 +26,27 @@ export function CorePage({ portfolio, market, positions }: {
   }, 0)
   const remaining = Math.max(target - currentValue, 0)
   const fundingGap = Math.max(target - funded, 0)
-  const unfundedCost = Math.max(recordedCost - funded, 0)
+  const unfundedCost = Math.max((portfolio.capital?.core.committed ?? recordedCost + putCollateral) - funded, 0)
   const overTarget = Math.max(currentValue - target, 0)
   const coreCapital = portfolio.capital?.core ?? { assigned: funded, committed: recordedCost, available: Math.max(funded - recordedCost, 0), cash_occupancy: 0 }
   const cashAvailable = portfolio.capital?.cash.available ?? (portfolio.balances?.cash ?? 0)
 
   return <div className="page-stack core-console">
-    <div className="page-heading"><div><p className="eyebrow">BRK.B + VOO CORE EQUITY</p><h1>核心仓相对定投</h1><span>无固定内部比例 · 新增资金路由与满仓轮换</span></div><span>{lots.length} 笔持仓 · {formatMoney(currentValue)}</span></div>
+    <div className="page-heading"><div><p className="eyebrow">BRK.B + VOO CORE EQUITY</p><h1>核心仓相对定投</h1><span>无固定内部比例 · 新增资金路由与满仓轮换</span></div><span>{lots.length} 笔股票 · {corePuts.length} 笔待接股</span></div>
 
     <section className={`core-budget-band ${overTarget > 0 || unfundedCost > 0 ? 'danger' : ''}`} aria-label="核心仓预算">
       <CoreMetric icon={<WalletCards size={18} />} label="核心仓目标预算" value={target} note={`总资产动态目标 ${(targetFraction * 100).toFixed(1)}%`} />
       <CoreMetric icon={<Landmark size={18} />} label="已分配核心本金" value={coreCapital.assigned} note={fundingGap > 0 ? `距动态目标 ${formatMoney(fundingGap)}` : '本金已达当前目标'} />
-      <CoreMetric icon={<CircleDollarSign size={18} />} label="成本占用" value={coreCapital.committed} note={`${lots.length} 笔实际持仓`} danger={unfundedCost > 0} />
+      <CoreMetric icon={<CircleDollarSign size={18} />} label="总资金占用" value={coreCapital.committed} note={`股票成本 ${formatMoney(recordedCost)} · Put 担保 ${formatMoney(putCollateral)}`} danger={unfundedCost > 0} />
       <CoreMetric icon={<Banknote size={18} />} label="可用核心本金" value={coreCapital.available} note="新买入优先使用" />
       <CoreMetric icon={<TrendingUp size={18} />} label="最新估算市值" value={currentValue} note="BRK.B 与 VOO 合计" danger={overTarget > 0} />
-      <CoreMetric icon={<Gauge size={18} />} label="目标剩余容量" value={remaining} note={market?.core?.mode === 'full' ? '已进入满仓轮换模式' : '按当前市值计算'} />
+      <CoreMetric icon={<Gauge size={18} />} label="目标剩余容量" value={remaining} note={putCollateral ? `全部接股后约剩 ${formatMoney(Math.max(remaining - putCollateral, 0))}` : market?.core?.mode === 'full' ? '已进入满仓轮换模式' : '按当前市值计算'} />
       <CoreMetric icon={<WalletCards size={18} />} label="可用现金" value={cashAvailable} note="核心本金不足时可转入" />
     </section>
 
-    {(overTarget > 0 || unfundedCost > 0) && <div className="core-budget-alert" role="alert"><AlertTriangle size={17} /><span>{overTarget > 0 && <>核心仓市值超过目标预算 {formatMoney(overTarget)}。</>}{unfundedCost > 0 && <>持仓成本超过实到核心资金 {formatMoney(unfundedCost)}。</>}</span></div>}
+    {(overTarget > 0 || unfundedCost > 0) && <div className="core-budget-alert" role="alert"><AlertTriangle size={17} /><span>{overTarget > 0 && <>核心仓市值超过目标预算 {formatMoney(overTarget)}。</>}{unfundedCost > 0 && <>股票成本与待接股担保超过实到核心资金 {formatMoney(unfundedCost)}。</>}</span></div>}
+
+    <CorePutRegister puts={corePuts} market={market} />
 
     <CoreRelativeBoard decision={market?.core ?? null} />
     <CoreBuySignal decision={market?.core ?? null} />
@@ -60,6 +65,39 @@ export function CorePage({ portfolio, market, positions }: {
         })}
       </div> : <div className="core-empty"><Gauge size={22} /><p>IBKR 报表中暂无 BRK.B 或 VOO 持仓</p></div>}
     </section>
+  </div>
+}
+
+function CorePutRegister({ puts, market }: { puts: WheelPutLot[]; market: MarketSnapshot | null }) {
+  const collateral = puts.reduce((total, put) => total + put.collateral, 0)
+  return <section className={`core-put-register ${puts.length ? 'active' : ''}`} aria-label="核心仓 Sell Put 建仓">
+    <header>
+      <div className="core-put-title"><ShieldCheck size={20} /><div><p>CORE ACQUISITION PUTS</p><h2>核心仓 Sell Put 建仓</h2></div></div>
+      <div className="core-put-summary"><span>{puts.length} 笔待接股</span><strong>{formatMoney(collateral)}</strong><small>核心本金担保占用</small></div>
+    </header>
+    {puts.length ? <div className="core-put-table">
+      <div className="core-put-row header"><span>建仓批次</span><span>到期日</span><span>行权 / 有效成本</span><span>权利金</span><span>担保占用</span><span>开仓年化</span><span>接股状态</span></div>
+      {puts.map((put, index) => <CorePutRow key={put.id} put={put} index={index} market={market} />)}
+    </div> : <div className="core-put-empty"><CalendarClock size={20} /><span>当前没有用于核心仓建仓的 Sell Put</span></div>}
+  </section>
+}
+
+function CorePutRow({ put, index, market }: { put: WheelPutLot; index: number; market: MarketSnapshot | null }) {
+  const spot = market?.core?.assets?.find((asset) => asset.symbol === put.symbol)?.price
+    ?? (put.symbol === 'BRK.B' ? market?.market.brk_b.price : market?.market.voo?.price)
+  const effectiveCost = put.strike - put.premium
+  const premiumIncome = put.premium * 100 * put.open_quantity
+  const dte = daysBetween(market?.as_of ?? put.trade_date, put.expiration)
+  const buffer = spot ? spot / put.strike - 1 : null
+  const assignmentRisk = buffer != null && buffer < 0
+  return <div className={`core-put-row ${assignmentRisk ? 'assignment-risk' : ''}`}>
+    <div><strong>{put.symbol}</strong><small>错峰第 {index + 1} 笔 · {put.open_quantity} 张</small></div>
+    <div><strong>{put.expiration}</strong><small>剩余 {Math.max(dte, 0)} 天</small></div>
+    <div><strong>{formatMoney(put.strike)} / {formatMoney(effectiveCost)}</strong><small>每股有效接股成本</small></div>
+    <div><strong>{formatMoney(premiumIncome)}</strong><small>{formatMoney(put.premium)} / 股</small></div>
+    <div><strong>{formatMoney(put.collateral)}</strong><small>{put.open_quantity * 100} 股潜在接股</small></div>
+    <div><strong>{formatPercent(put.opening_annualized_return)}</strong><small>{put.opening_dte} DTE 开仓</small></div>
+    <div><strong>{assignmentRisk ? '已低于行权价' : buffer == null ? '等待行情' : `缓冲 ${formatPercent(buffer)}`}</strong><small>{assignmentRisk ? '按核心仓长期持有处理' : '接股后归入核心仓，不卖 CC'}</small></div>
   </div>
 }
 
@@ -126,6 +164,7 @@ function numberedLots(lots: Position[]) {
 
 function formatPercent(value: number | null | undefined) { return value == null || !Number.isFinite(value) ? '—' : `${value >= 0 ? '+' : ''}${(value * 100).toFixed(1)}%` }
 function formatSigned(value: number, digits: number) { return `${value >= 0 ? '+' : ''}${value.toFixed(digits)}` }
+function daysBetween(start: string, end: string) { return Math.round((Date.parse(end) - Date.parse(start)) / 86_400_000) }
 function coreBuyLabel(asset: Pick<CoreAssetDecision, 'code' | 'fraction'>) {
   if (asset.code === 'monthly' && asset.fraction <= .025) return '高位极轻定投'
   if (asset.code === 'monthly' && asset.fraction <= .05) return '高位轻仓定投'

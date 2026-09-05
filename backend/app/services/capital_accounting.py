@@ -72,16 +72,20 @@ class CapitalAccountingService:
             ),
             ZERO,
         )
-        put_commitment = sum(
-            (
-                row.collateral
-                for row in self.session.scalars(
-                    select(WheelPutLot).where(
-                        WheelPutLot.state == "open",
-                        WheelPutLot.open_quantity > 0,
-                    )
+        open_puts = list(
+            self.session.scalars(
+                select(WheelPutLot).where(
+                    WheelPutLot.state == "open",
+                    WheelPutLot.open_quantity > 0,
                 )
-            ),
+            )
+        )
+        core_put_commitment = sum(
+            (row.collateral for row in open_puts if row.capital_bucket == Bucket.CORE.value),
+            ZERO,
+        )
+        wheel_put_commitment = sum(
+            (row.collateral for row in open_puts if row.capital_bucket == Bucket.WHEEL.value),
             ZERO,
         )
         share_commitment = sum(
@@ -97,11 +101,12 @@ class CapitalAccountingService:
             ZERO,
         )
         core = strategy_capacity(
-            balances.get(Bucket.CORE.value, ZERO), core_commitment
+            balances.get(Bucket.CORE.value, ZERO),
+            core_commitment + core_put_commitment,
         )
         wheel = strategy_capacity(
             balances.get(Bucket.WHEEL.value, ZERO),
-            put_commitment + share_commitment,
+            wheel_put_commitment + share_commitment,
         )
         leaps = strategy_capacity(
             balances.get(Bucket.LEAPS.value, ZERO), leaps_commitment
@@ -113,7 +118,7 @@ class CapitalAccountingService:
         cash = cash_capacity(
             balances.get(Bucket.CASH.value, ZERO),
             cash_equivalent=self._cash_equivalent_value(),
-            wheel_occupancy=options.cash_occupancy,
+            wheel_occupancy=options.cash_occupancy + core.cash_occupancy,
         )
         return CapitalSnapshot(
             core=core,

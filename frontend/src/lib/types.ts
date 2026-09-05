@@ -347,6 +347,7 @@ export interface WheelShareLot {
 export interface WheelPutLot {
   id: number
   round_id: number
+  capital_bucket?: 'wheel' | 'core'
   symbol: string
   batch_number: 1 | 2
   trade_date: string
@@ -432,6 +433,7 @@ export interface WheelOverview {
   recommendations: { first: number; second: number }
   realized_profit: number
   rounds: WheelRound[]
+  core_puts?: WheelPutLot[]
 }
 
 export interface RebalancingBucket {

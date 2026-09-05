@@ -26,6 +26,7 @@ from app.db_models import (
     WheelShareLot,
 )
 from app.domain.models import Bucket
+from app.domain.core import CORE_SYMBOLS
 from app.domain.trillion_club import is_club_symbol, is_wheel_club_symbol
 from app.services.portfolio_store import PortfolioStore
 from app.services.realized_cash import RealizedCashService
@@ -836,7 +837,8 @@ class IbkrImportService:
         opened_on: date,
         confidence: str,
     ) -> dict[str, Any]:
-        if contract.symbol != "TQQQ" and not is_wheel_club_symbol(contract.symbol):
+        is_core_put = contract.symbol in CORE_SYMBOLS
+        if not is_core_put and contract.symbol != "TQQQ" and not is_wheel_club_symbol(contract.symbol):
             return self._preview_unmanaged(row, contract, opened_on, confidence)
         existing_rows = self._matching_puts(contract)
         if len(existing_rows) > 1:
@@ -860,8 +862,19 @@ class IbkrImportService:
         details = _contract_details(contract, opened_on)
         details.update(
             put_id=existing.id if existing else None,
+            capital_bucket=(
+                existing.capital_bucket
+                if existing
+                else Bucket.CORE.value
+                if is_core_put
+                else Bucket.WHEEL.value
+            ),
             underlying_entry_price=(float(existing.entry_tqqq_price) if existing else None),
-            earnings_confirmed=(existing.earnings_confirmed if existing else contract.symbol == "TQQQ"),
+            earnings_confirmed=(
+                existing.earnings_confirmed
+                if existing
+                else is_core_put or contract.symbol == "TQQQ"
+            ),
         )
         exact = existing is not None and (
             existing.open_quantity == abs(int(contract.quantity))
@@ -908,7 +921,11 @@ class IbkrImportService:
                 details=details,
             )
         needs_reference = not existing and details["underlying_entry_price"] is None
-        needs_earnings = contract.symbol != "TQQQ" and not details["earnings_confirmed"]
+        needs_earnings = (
+            not is_core_put
+            and contract.symbol != "TQQQ"
+            and not details["earnings_confirmed"]
+        )
         return self._item(
             row,
             instrument=_instrument_label(contract),
@@ -918,6 +935,9 @@ class IbkrImportService:
             selected=True,
             can_import=True,
             message=(
+                "新增核心仓 Sell Put 建仓；接股后转入核心仓，禁止自动 Covered Call"
+                if is_core_put
+                else
                 "新增 Sell Put；报表未提供开仓正股价与财报确认，保留为待刷新参考"
                 if needs_reference and needs_earnings
                 else "新增 Sell Put；报表未提供开仓正股价，保留为待刷新参考"
@@ -935,7 +955,11 @@ class IbkrImportService:
         position_contract: Contract,
         roll: PutRoll,
     ) -> dict[str, Any]:
-        if position_contract.symbol != "TQQQ" and not is_wheel_club_symbol(position_contract.symbol):
+        if (
+            position_contract.symbol not in CORE_SYMBOLS
+            and position_contract.symbol != "TQQQ"
+            and not is_wheel_club_symbol(position_contract.symbol)
+        ):
             return self._preview_unmanaged(
                 position_row,
                 position_contract,
@@ -1025,6 +1049,13 @@ class IbkrImportService:
             "put_id": previous.id if previous else None,
             "current_put_id": current.id if current else None,
             "symbol": roll.opening_contract.symbol,
+            "capital_bucket": (
+                previous.capital_bucket
+                if previous
+                else Bucket.CORE.value
+                if roll.opening_contract.symbol in CORE_SYMBOLS
+                else Bucket.WHEEL.value
+            ),
             "asset_type": "option",
             "option_type": "put",
             "quantity": quantity,
@@ -1689,9 +1720,15 @@ class IbkrImportService:
             return record.id
         if action == "create_wheel_put":
             underlying = details.get("underlying_entry_price")
-            round_id = self._active_wheel_round_id(details["symbol"])
+            capital_bucket = details.get("capital_bucket", Bucket.WHEEL.value)
+            round_id = (
+                None
+                if capital_bucket == Bucket.CORE.value
+                else self._active_wheel_round_id(details["symbol"])
+            )
             record = service.open_put(
                 symbol=details["symbol"],
+                capital_bucket=capital_bucket,
                 batch_number=1,
                 trade_date=date.fromisoformat(details["opened_on"]),
                 expiration=date.fromisoformat(details["expiration"]),
@@ -2245,7 +2282,7 @@ def _option_identity(values: dict[str, str]) -> tuple[str, date, Decimal, str] |
         return _normalize_symbol(occ.group(1)), expiration, strike_value, "put" if occ.group(3) == "P" else "call"
 
     readable = re.fullmatch(
-        r"\s*([A-Z.\-]{1,10})\s+(\d{1,2})([A-Z]{3})(\d{2,4})\s+([\d.]+)\s+([CP])\s*",
+        r"\s*([A-Z.\-]{1,10}(?:\s+[A-Z])?)\s+(\d{1,2})([A-Z]{3})(\d{2,4})\s+([\d.]+)\s+([CP])\s*",
         raw_symbol.upper(),
     )
     if readable:

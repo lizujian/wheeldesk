@@ -187,11 +187,12 @@ def test_initialize_database_marks_legacy_wheel_puts_as_tqqq(tmp_path: Path) -> 
     columns = {column["name"] for column in inspect(engine).get_columns("wheel_put_lots")}
     with engine.connect() as connection:
         row = connection.exec_driver_sql(
-            "SELECT symbol, earnings_confirmed FROM wheel_put_lots WHERE id = 3"
+            "SELECT symbol, earnings_confirmed, capital_bucket "
+            "FROM wheel_put_lots WHERE id = 3"
         ).one()
 
-    assert {"symbol", "earnings_confirmed", "rolled_from_put_id"} <= columns
-    assert row == ("TQQQ", 0)
+    assert {"symbol", "earnings_confirmed", "rolled_from_put_id", "capital_bucket"} <= columns
+    assert row == ("TQQQ", 0, "wheel")
 
 
 def test_initialize_database_migrates_legacy_other_holdings_once(tmp_path: Path) -> None:

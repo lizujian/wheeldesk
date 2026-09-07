@@ -38,7 +38,7 @@ export function SignalsPage({ signals, onAcknowledge }: { signals: Signal[]; onA
 
     {primary ? <PrimarySignal signal={primary} onAcknowledge={onAcknowledge} /> : <section className="signal-clear-state" aria-label="无待处理信号">
       <CheckCircle2 size={24} />
-      <div><span>CLEAR</span><strong>当前没有待处理信号</strong><small>已确认建议仍保留在下方近期记录，不会消失。</small></div>
+      <div><span>CLEAR</span><strong>当前没有待处理信号</strong><small>已处理或条件变化的建议保留在下方近期记录。</small></div>
     </section>}
 
     {remaining.length > 0 && <section className="signal-queue" aria-labelledby="signal-queue-title">
@@ -47,8 +47,8 @@ export function SignalsPage({ signals, onAcknowledge }: { signals: Signal[]; onA
     </section>}
 
     <section className="signal-history" aria-labelledby="signal-history-title">
-      <header><div><p>RECENT HISTORY</p><h2 id="signal-history-title">近期已确认记录</h2></div><span>确认后仅移出全局提醒，不删除记录</span></header>
-      {history.length ? <div className="signal-history-list">{history.map((signal) => <HistorySignal signal={signal} key={signal.id} />)}</div> : <div className="empty-state"><Clock3 size={21} /><p>暂无已确认记录</p></div>}
+      <header><div><p>RECENT HISTORY</p><h2 id="signal-history-title">近期归档记录</h2></div><span>已处理或条件变化，仅移出全局提醒</span></header>
+      {history.length ? <div className="signal-history-list">{history.map((signal) => <HistorySignal signal={signal} key={signal.id} />)}</div> : <div className="empty-state"><Clock3 size={21} /><p>暂无归档记录</p></div>}
     </section>
   </div>
 }
@@ -86,7 +86,7 @@ function HistorySignal({ signal }: { signal: Signal }) {
   return <article>
     <CheckCircle2 size={17} />
     <div><span>{meta.label} · {signal.market_date}</span><strong>{signal.title}</strong><small>{signal.message}</small></div>
-    <em>已确认</em>
+    <em>已归档</em>
     <Link to={meta.path} title={`查看${meta.label}`}><ArrowRight size={16} /></Link>
   </article>
 }

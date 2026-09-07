@@ -2,6 +2,8 @@ from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from decimal import Decimal
 
+from app.domain.core_rotation import CoreRotationDecision, RotationUsage, evaluate_rotation
+
 ZERO = Decimal("0")
 CENT = Decimal("0.01")
 SHARE = Decimal("0.0001")
@@ -16,7 +18,7 @@ MONTHLY_FRACTIONS = (
     (Decimal("65"), Decimal("0.025")),
     (Decimal("50"), Decimal("0.05")),
 )
-TIER_RANK = {"monthly": 1, "pullback": 2, "correction": 3, "deep": 4}
+TIER_RANK = {"monthly": 1, "pullback": 2, "put": 2, "correction": 3, "deep": 4}
 CORE_SYMBOLS = ("BRK.B", "VOO")
 
 
@@ -62,6 +64,7 @@ class CoreAssetInputs:
     return_126d: Decimal
     last_purchase_date: date | None
     last_purchase_tier: str | None
+    support_price: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -88,20 +91,6 @@ class CoreAssetDecision:
 
 
 @dataclass(frozen=True)
-class CoreRotationDecision:
-    code: str
-    actionable: bool
-    sell_symbol: str | None
-    buy_symbol: str | None
-    amount: Decimal
-    sell_shares: Decimal
-    buy_shares: Decimal
-    return_spread: Decimal
-    defensive_half: bool
-    cooldown_days_remaining: int
-
-
-@dataclass(frozen=True)
 class CorePortfolioDecision:
     mode: str
     total_target: Decimal
@@ -116,6 +105,55 @@ class CorePortfolioDecision:
     recommendation: CoreAssetDecision | None
     rotation: CoreRotationDecision
     assets: tuple[CoreAssetDecision, ...]
+    pending_put_collateral: Decimal
+    unplanned_gap: Decimal
+    sell_put: "CorePutDecision"
+
+
+@dataclass(frozen=True)
+class CorePutDecision:
+    code: str
+    actionable: bool
+    symbol: str | None
+    reference_strike: Decimal | None
+    collateral: Decimal
+    direct_buy_reserve: Decimal
+    contracts: int = 0
+    dte_range: tuple[int, int] = (7, 21)
+
+
+def evaluate_core_put(
+    selected: CoreAssetDecision | None,
+    *,
+    support_price: Decimal | None,
+    available_funding: Decimal,
+    unplanned_gap: Decimal,
+    pending_put_collateral: Decimal,
+) -> CorePutDecision:
+    reserve = (max(available_funding, ZERO) / 2).quantize(CENT)
+    empty = CorePutDecision("waiting", False, None, None, ZERO, reserve)
+    if pending_put_collateral > ZERO:
+        return replace(empty, code="pending_puts")
+    if selected is None or not selected.actionable:
+        return empty
+    if selected.code in ("correction", "deep"):
+        return replace(empty, code="direct_buy_preferred")
+    if not (
+        selected.code == "pullback"
+        and selected.price > selected.ma200
+        and selected.rsi14 < Decimal("50")
+        and selected.daily_change < ZERO
+    ):
+        return empty
+    if support_price is None or not ZERO < support_price < selected.price:
+        return replace(empty, code="no_support")
+    strike = support_price.quantize(CENT)
+    collateral = strike * 100
+    funded = collateral <= min(max(available_funding - reserve, ZERO), unplanned_gap)
+    return CorePutDecision(
+        "opportunity" if funded else "insufficient_reserve",
+        funded, selected.symbol, strike, collateral, reserve, 1 if funded else 0,
+    )
 
 
 def evaluate_core_buy(inputs: CoreBuyInputs) -> CoreBuyDecision:
@@ -185,21 +223,37 @@ def evaluate_core_portfolio(
     last_account_purchase_date: date | None,
     last_rotation_date: date | None,
     ratio_reset_since_rotation: bool,
+    pending_put_collateral: Decimal = ZERO,
+    rotation_ratios: list[tuple[date, Decimal]] | None = None,
+    rotation_usage: RotationUsage = RotationUsage(),
+    pending_brk_shares: Decimal = ZERO,
+    pending_voo_shares: Decimal = ZERO,
+    rotation_data_valid: bool = True,
+    rotation_prices: dict[str, Decimal] | None = None,
 ) -> CorePortfolioDecision:
     total_value = sum((asset.current_value for asset in assets), ZERO)
     target_gap = max(total_target - total_value, ZERO)
+    pending_put_collateral = max(pending_put_collateral, ZERO)
+    unplanned_gap = max(target_gap - pending_put_collateral, ZERO)
     full_threshold = (total_target * Decimal("0.98")).quantize(CENT)
     mode = "full" if total_target > ZERO and total_value >= full_threshold else "accumulating"
     decisions = tuple(
         _evaluate_asset(
             asset,
             as_of=as_of,
-            target_gap=target_gap,
+            target_gap=unplanned_gap,
             available_funding=available_funding,
             vix=vix,
         )
         for asset in assets
     )
+    if pending_put_collateral > ZERO:
+        decisions = tuple(
+            _suppress_asset(asset, "pending_puts")
+            if asset.code in ("monthly", "pullback", "at_target")
+            else asset
+            for asset in decisions
+        )
     daily_limit_open = last_account_purchase_date != as_of
     selected = None
     if mode == "accumulating":
@@ -210,17 +264,35 @@ def evaluate_core_portfolio(
         )
         if selected is not None and not daily_limit_open:
             selected = _suppress_asset(selected, "cooldown")
-    rotation = _evaluate_rotation(
-        decisions,
-        as_of=as_of,
-        mode=mode,
-        total_equity=total_equity,
-        ratio_z=ratio_z,
-        confirmation_days=rotation_confirmation_days,
-        last_rotation_date=last_rotation_date,
-        ratio_reset_since_rotation=ratio_reset_since_rotation,
+    by_symbol = {asset.symbol: asset for asset in assets}
+    close_prices = rotation_prices or {asset.symbol: asset.price for asset in assets}
+    rotation_values = {
+        symbol: asset.current_value / asset.price * close_prices.get(symbol, ZERO) if asset.price > ZERO else ZERO
+        for symbol, asset in by_symbol.items()
+    }
+    rotation = evaluate_rotation(
+        full=total_target > ZERO and sum(rotation_values.values(), ZERO) >= full_threshold,
+        brk_value=rotation_values.get("BRK.B", ZERO),
+        voo_value=rotation_values.get("VOO", ZERO),
+        brk_price=close_prices.get("BRK.B", ZERO),
+        voo_price=close_prices.get("VOO", ZERO),
+        ratios=rotation_ratios or [],
+        usage=rotation_usage,
+        pending_brk_shares=pending_brk_shares,
+        pending_voo_shares=pending_voo_shares,
+        data_valid=rotation_data_valid,
         daily_limit_open=daily_limit_open,
     )
+    put = evaluate_core_put(
+        selected,
+        support_price=next((asset.support_price for asset in assets if selected and asset.symbol == selected.symbol), None),
+        available_funding=available_funding,
+        unplanned_gap=unplanned_gap,
+        pending_put_collateral=pending_put_collateral,
+    )
+    if put.actionable:
+        selected = _suppress_asset(selected, "put_preferred")
+        decisions = tuple(selected if asset.symbol == selected.symbol else asset for asset in decisions)
     return CorePortfolioDecision(
         mode=mode,
         total_target=total_target,
@@ -229,12 +301,15 @@ def evaluate_core_portfolio(
         full_threshold=full_threshold,
         ratio_z=ratio_z,
         route_confirmation_days=route_confirmation_days,
-        rotation_confirmation_days=rotation_confirmation_days,
+        rotation_confirmation_days=rotation.confirmation_days,
         selected_symbol=selected.symbol if selected is not None else None,
         daily_limit_open=daily_limit_open,
         recommendation=selected,
         rotation=rotation,
         assets=decisions,
+        pending_put_collateral=pending_put_collateral,
+        unplanned_gap=unplanned_gap,
+        sell_put=put,
     )
 
 
@@ -311,71 +386,6 @@ def _select_accumulation_asset(
             -asset.rsi14,
             asset.symbol == "VOO",
         ),
-    )
-
-
-def _evaluate_rotation(
-    assets: tuple[CoreAssetDecision, ...],
-    *,
-    as_of: date,
-    mode: str,
-    total_equity: Decimal,
-    ratio_z: Decimal,
-    confirmation_days: int,
-    last_rotation_date: date | None,
-    ratio_reset_since_rotation: bool,
-    daily_limit_open: bool,
-) -> CoreRotationDecision:
-    empty = CoreRotationDecision("waiting", False, None, None, ZERO, ZERO, ZERO, ZERO, False, 0)
-    if mode != "full" or len(assets) < 2:
-        return empty
-    sell_symbol = "BRK.B" if ratio_z > ZERO else "VOO"
-    buy_symbol = "VOO" if sell_symbol == "BRK.B" else "BRK.B"
-    sell = next((asset for asset in assets if asset.symbol == sell_symbol), None)
-    buy = next((asset for asset in assets if asset.symbol == buy_symbol), None)
-    if sell is None or buy is None:
-        return empty
-    spread = sell.return_126d - buy.return_126d
-    absolute_z = abs(ratio_z)
-    tier = None
-    fraction = ZERO
-    cap = ZERO
-    if absolute_z >= Decimal("3") and spread >= Decimal("0.35"):
-        tier, fraction, cap = "extreme", Decimal("0.20"), Decimal("0.05")
-    elif absolute_z >= Decimal("2.5") and spread >= Decimal("0.25"):
-        tier, fraction, cap = "strong", Decimal("0.15"), Decimal("0.04")
-    elif absolute_z >= Decimal("2") and spread >= Decimal("0.15"):
-        tier, fraction, cap = "standard", Decimal("0.10"), Decimal("0.03")
-    if tier is None or confirmation_days < 5:
-        return replace(empty, code="watch", sell_symbol=sell_symbol, buy_symbol=buy_symbol, return_spread=spread)
-    cooldown_remaining = 0
-    if last_rotation_date is not None:
-        cooldown_remaining = max(20 - _business_days_between(last_rotation_date, as_of), 0)
-    if cooldown_remaining > 0 or not ratio_reset_since_rotation or not daily_limit_open:
-        code = "cooldown" if cooldown_remaining > 0 or not daily_limit_open else "reset_wait"
-        return replace(
-            empty,
-            code=code,
-            sell_symbol=sell_symbol,
-            buy_symbol=buy_symbol,
-            return_spread=spread,
-            cooldown_days_remaining=cooldown_remaining,
-        )
-    amount = min(sell.current_value * fraction, total_equity * cap).quantize(CENT)
-    defensive_half = buy.below_ma200_two_days
-    if defensive_half:
-        amount = (amount / Decimal("2")).quantize(CENT)
-    return CoreRotationDecision(
-        code=tier,
-        actionable=amount > ZERO,
-        sell_symbol=sell_symbol,
-        buy_symbol=buy_symbol,
-        amount=amount,
-        sell_shares=(amount / sell.price).quantize(SHARE) if sell.price > ZERO else ZERO,
-        buy_shares=(amount / buy.price).quantize(SHARE) if buy.price > ZERO else ZERO,
-        return_spread=spread,
-        defensive_half=defensive_half,
-        cooldown_days_remaining=0,
     )
 
 

@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.db_models import (
     BrokerImportRecord,
+    CoreTradeRecord,
     BucketBalance,
     ExitPositionRecord,
     LedgerEvent,
@@ -29,6 +30,7 @@ class ResetService:
         try:
             for model in (
                 BrokerImportRecord,
+                CoreTradeRecord,
                 RealizedCashPosting,
                 ProfitLedgerEntry,
                 WheelCallLot,

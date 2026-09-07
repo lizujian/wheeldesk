@@ -332,6 +332,19 @@ class ProfitLedgerEntry(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class CoreTradeRecord(Base):
+    __tablename__ = "core_trades"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    symbol: Mapped[str] = mapped_column(String(20))
+    traded_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(18, 4))
+    price: Mapped[Decimal] = mapped_column(Numeric(18, 4))
+    pre_quantities: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class BrokerImportRecord(Base):
     __tablename__ = "broker_import_records"
 

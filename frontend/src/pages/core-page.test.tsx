@@ -84,6 +84,32 @@ const wheel: WheelOverview = {
 }
 
 describe('core equity page', () => {
+  it('shows core put entry reference and retained direct buy funds', () => {
+    const putMarket: MarketSnapshot = { ...market, core: { ...market.core!,
+      sell_put: { code: 'opportunity', actionable: true, symbol: 'BRK.B', reference_strike: 480, collateral: 48000, direct_buy_reserve: 50000, contracts: 1, dte_range: [7, 21] },
+    } }
+    render(<CorePage portfolio={portfolio} market={putMarket} positions={positions} />)
+    const signal = screen.getByRole('region', { name: '核心仓 Sell Put 建议' })
+    expect(within(signal).getByText('可评估 Sell Put 建仓')).toBeInTheDocument()
+    expect(within(signal).getByText('$480.00')).toBeInTheDocument()
+    expect(within(signal).getByText('$48,000.00')).toBeInTheDocument()
+    expect(within(signal).getByText('保留直接买股资金至少 $50,000.00')).toBeInTheDocument()
+  })
+
+  it('explains pending put plans instead of repeating routine DCA', () => {
+    const pendingMarket: MarketSnapshot = {
+      ...market,
+      core: { ...market.core!, pending_put_collateral: 30000, unplanned_gap: 10250,
+        recommendation: { ...market.core!.recommendation!, code: 'pending_puts', actionable: false, executable_amount: 0, shares: 0 } },
+    }
+    render(<CorePage portfolio={portfolio} market={pendingMarket} positions={positions} />)
+    const signal = screen.getByRole('region', { name: '核心仓买入建议' })
+    expect(within(signal).getByText('已有 Put 建仓安排')).toBeInTheDocument()
+    expect(within(signal).getByText('暂停常规定投，等待明显回调机会')).toBeInTheDocument()
+    expect(within(signal).getByText(/待接股担保 \$30,000.00 · 未安排缺口 \$10,250.00/)).toBeInTheDocument()
+    expect(within(signal).queryByText(/下一笔优先买入/)).not.toBeInTheDocument()
+  })
+
   it('shows the combined core budget and both strategy assets', () => {
     render(<CorePage portfolio={portfolio} market={market} positions={positions} overview={wheel} />)
 
@@ -135,13 +161,16 @@ describe('core equity page', () => {
       core: {
         ...market.core!, mode: 'full', total_value: 50000, target_gap: 0,
         selected_symbol: null, recommendation: null, rotation_confirmation_days: 5,
-        rotation: { code: 'standard', actionable: true, sell_symbol: 'BRK.B', buy_symbol: 'VOO', amount: 3000, sell_shares: 6.1224, buy_shares: 5, return_spread: .18, defensive_half: false, cooldown_days_remaining: 0 },
+        rotation: { code: 'opportunity', actionable: true, sell_symbol: 'BRK.B', buy_symbol: 'VOO', amount: 3000, sell_shares: 6.1224, buy_shares: 5, ratio: .84, confirmation_days: 3, current_brk_weight: .8, projected_brk_weight: .9, target_brk_weight: .55, next_brk_weight: .74, used_weight: .14, remaining_weight: .06 },
       },
     }
     render(<CorePage portfolio={portfolio} market={fullMarket} positions={positions} />)
     const rotation = screen.getByRole('region', { name: '核心仓满仓轮换建议' })
-    expect(within(rotation).getByText('标准轮换')).toBeInTheDocument()
+    expect(within(rotation).getByText('可评估分批轮动')).toBeInTheDocument()
     expect(within(rotation).getByText('BRK.B → VOO')).toBeInTheDocument()
-    expect(within(rotation).getByText('$3,000.00')).toBeInTheDocument()
+    expect(within(rotation).getByText('$3,000.00 · —')).toBeInTheDocument()
+    expect(within(rotation).getByText('0.8400 · 3 / 3 日')).toBeInTheDocument()
+    expect(within(rotation).getByText('80.0% / 90.0%')).toBeInTheDocument()
+    expect(within(rotation).getByText('55.0% / 74.0%')).toBeInTheDocument()
   })
 })

@@ -34,9 +34,9 @@ describe('signals page', () => {
     const primary = screen.getByRole('region', { name: '当前最优先信号' })
     expect(within(primary).getByText('跌破牛熊分界线')).toBeInTheDocument()
     expect(within(primary).getByRole('button', { name: '标记为已处理' })).toBeInTheDocument()
-    const history = screen.getByRole('heading', { name: '近期已确认记录' }).closest('section')!
+    const history = screen.getByRole('heading', { name: '近期归档记录' }).closest('section')!
     expect(within(history).getByText('BRK.B 核心仓买入建议')).toBeInTheDocument()
-    expect(within(history).getByText('已确认')).toBeInTheDocument()
+    expect(within(history).getByText('已归档')).toBeInTheDocument()
     expect(within(history).getByTitle('查看核心仓')).toHaveAttribute('href', '/core')
   })
 
@@ -53,7 +53,7 @@ describe('signals page', () => {
   it('explains that handled signals remain in history when the queue is clear', () => {
     render(<MemoryRouter><SignalsPage signals={[signals[1]]} onAcknowledge={async () => {}} /></MemoryRouter>)
 
-    expect(screen.getByRole('region', { name: '无待处理信号' })).toHaveTextContent('已确认建议仍保留在下方近期记录')
+    expect(screen.getByRole('region', { name: '无待处理信号' })).toHaveTextContent('已处理或条件变化的建议保留在下方近期记录')
     expect(screen.getByText('BRK.B 核心仓买入建议')).toBeInTheDocument()
   })
 })

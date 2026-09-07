@@ -2,6 +2,7 @@ from dataclasses import asdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -51,10 +52,12 @@ from app.market.sample import SampleMarketDataProvider
 from app.market.yahoo import YahooMarketDataProvider
 from app.services.portfolio_store import PortfolioStore
 from app.services.signals import SignalService
+from app.services.core_rotation import CoreRotationService
 from app.services.wheel_cycles import WheelCycleService
 from app.services.wheel_portfolio import WheelPortfolioService
 from app.services.wheel_quotes import WheelQuoteService
 from app.db_models import (
+    CoreTradeRecord,
     LedgerEvent,
     PositionRecord,
     UnmanagedPositionRecord,
@@ -314,6 +317,10 @@ def refresh(
     cash_capital = portfolio.get("capital", {}).get("cash", {})
     core_available = Decimal(str(core_capital.get("available", 0)))
     cash_available = Decimal(str(cash_capital.get("available", 0)))
+    pending_core_collateral = sum(
+        (Decimal(str(put["collateral"])) for put in wheel_overview["core_puts"]),
+        ZERO,
+    )
     core_events = list(
         session.scalars(
             select(LedgerEvent)
@@ -324,12 +331,19 @@ def refresh(
             .order_by(LedgerEvent.occurred_on.desc(), LedgerEvent.id.desc())
         )
     )
-    last_rotation_event = session.scalar(
-        select(LedgerEvent)
-        .where(LedgerEvent.event_type.in_(("core_rotation_leg", "core_rebalance_sale")))
-        .order_by(LedgerEvent.occurred_on.desc(), LedgerEvent.id.desc())
+    last_core_put_date = session.scalar(
+        select(WheelPutLot.trade_date)
+        .where(WheelPutLot.capital_bucket == Bucket.CORE.value, WheelPutLot.state != "voided")
+        .order_by(WheelPutLot.trade_date.desc())
         .limit(1)
     )
+    last_core_entry_date = max(
+        (value for value in (core_events[0].occurred_on if core_events else None, last_core_put_date) if value),
+        default=None,
+    )
+    last_core_trade = session.scalar(select(CoreTradeRecord.traded_at).order_by(CoreTradeRecord.traded_at.desc()).limit(1))
+    if last_core_trade:
+        last_core_entry_date = max(last_core_entry_date or last_core_trade.date(), last_core_trade.date())
     brk_by_date = {bar.date: bar.close for bar in series["BRK.B"].bars}
     voo_by_date = {bar.date: bar.close for bar in series["VOO"].bars}
     common_dates = sorted(set(brk_by_date) & set(voo_by_date))
@@ -337,11 +351,22 @@ def refresh(
     voo_aligned = [voo_by_date[value] for value in common_dates]
     ratio_zscores = relative_ratio_zscores(brk_aligned, voo_aligned)
     ratio_z = ratio_zscores[-1] if ratio_zscores else ZERO
-    ratio_dates = common_dates[251:] if len(common_dates) >= 252 else []
-    ratio_reset = last_rotation_event is None or any(
-        value_date > last_rotation_event.occurred_on and abs(value) <= Decimal("1")
-        for value_date, value in zip(ratio_dates, ratio_zscores, strict=True)
-    )
+    completed_core = {}
+    for symbol in CORE_SYMBOLS:
+        bars = completed_daily_bars(series[symbol], session_quote) if session_quote else [
+            bar for bar in series[symbol].bars if bar.date < datetime.now(ZoneInfo("America/New_York")).date()
+        ]
+        completed_core[symbol] = {bar.date: bar.close for bar in bars}
+    rotation_dates = sorted(set(completed_core["BRK.B"]) & set(completed_core["VOO"]))
+    rotation_ratios = [(day, completed_core["BRK.B"][day] / completed_core["VOO"][day])
+                       for day in rotation_dates if min(completed_core[symbol][day] for symbol in CORE_SYMBOLS) > ZERO]
+    rotation_valid = bool(rotation_dates) and all(
+        series[symbol].source != "sample"
+        and not is_stale(rotation_dates[-1], date.today())
+        and sorted(completed_core[symbol])[-21:] == rotation_dates[-21:]
+        for symbol in CORE_SYMBOLS
+    ) and len(rotation_ratios) == len(rotation_dates)
+    rotation_usage, rotation_executions = CoreRotationService(session).usage(completed_core)
     core_assets = []
     for symbol in CORE_SYMBOLS:
         symbol_series = series[symbol]
@@ -353,9 +378,11 @@ def refresh(
         )
         ma200 = simple_moving_average(closes, 200)
         previous_ma200 = simple_moving_average(closes[:-1], 200)
+        core_supports = find_support_levels(symbol_series.bars, symbol_price)
         core_assets.append(
             CoreAssetInputs(
                 symbol=symbol,
+                support_price=core_supports[0].price if core_supports else None,
                 current_value=sum(
                     (
                         position.quantity * position.multiplier * symbol_price
@@ -393,12 +420,20 @@ def refresh(
         vix=series["VIX"].bars[-1].close,
         ratio_z=ratio_z,
         route_confirmation_days=consecutive_extreme(ratio_zscores, Decimal("1")),
-        rotation_confirmation_days=consecutive_extreme(ratio_zscores, Decimal("2")),
-        last_account_purchase_date=(core_events[0].occurred_on if core_events else None),
-        last_rotation_date=(last_rotation_event.occurred_on if last_rotation_event else None),
-        ratio_reset_since_rotation=ratio_reset,
+        rotation_confirmation_days=0,
+        last_account_purchase_date=last_core_entry_date,
+        last_rotation_date=None,
+        ratio_reset_since_rotation=True,
+        pending_put_collateral=pending_core_collateral,
+        rotation_ratios=rotation_ratios,
+        rotation_usage=rotation_usage,
+        pending_brk_shares=sum((Decimal(str(put["open_quantity"])) * 100 for put in wheel_overview["core_puts"] if put["symbol"] == "BRK.B"), ZERO),
+        pending_voo_shares=sum((Decimal(str(put["open_quantity"])) * 100 for put in wheel_overview["core_puts"] if put["symbol"] == "VOO"), ZERO),
+        rotation_data_valid=rotation_valid,
+        rotation_prices={symbol: completed_core[symbol][rotation_dates[-1]] for symbol in CORE_SYMBOLS} if rotation_dates else {},
     )
     core_payload = asdict(core_decision)
+    core_payload["rotation"]["executions"] = rotation_executions
     core_payload["core_available"] = core_available
     core_payload["cash_available"] = cash_available
     if core_payload["recommendation"] is not None:
@@ -424,32 +459,17 @@ def refresh(
         signal_service.emit(
             "vix_high", "VIX 达到 30", "评估是否动用现金储备。", "warning", market_date, stale=stale
         )
-    if core_decision.recommendation and core_decision.recommendation.actionable:
-        core_signal = core_decision.recommendation
-        signal_service.emit(
-            f"core_buy_{core_signal.symbol.lower().replace('.', '_')}",
-            f"{core_signal.symbol} 核心仓买入建议",
-            (
-                f"{core_signal.symbol} 当前为核心仓相对优先缺口，建议金额 "
-                f"{core_signal.executable_amount}；单日涨跌 "
-                f"{(core_signal.daily_change * Decimal('100')).quantize(Decimal('0.1'))}%、"
-                f"回撤 {(core_signal.drawdown * Decimal('100')).quantize(Decimal('0.1'))}%、"
-                f"RSI14 {core_signal.rsi14.quantize(Decimal('0.1'))}。"
-            ),
-            "opportunity",
-            market_date,
-            stale=stale,
-        )
-    if core_decision.rotation.actionable:
-        rotation = core_decision.rotation
-        signal_service.emit(
-            "core_rotation_opportunity",
-            f"核心仓轮换：{rotation.sell_symbol} → {rotation.buy_symbol}",
-            f"相对偏离达到 {rotation.code} 档，建议等额轮换 {rotation.amount}。",
-            "opportunity",
-            market_date,
-            stale=stale,
-        )
+    core_market_date = max(series[symbol].as_of for symbol in CORE_SYMBOLS)
+    signal_service.sync_core_buy(
+        core_decision.recommendation,
+        core_market_date,
+        put=core_decision.sell_put,
+        stale=any(
+            series[symbol].source == "sample" or is_stale(series[symbol].as_of, date.today())
+            for symbol in CORE_SYMBOLS
+        ),
+    )
+    signal_service.sync_core_rotation(core_decision.rotation, core_market_date, stale=not rotation_valid)
     if any(decision.eligible for decision in leaps) or fifo["required"]:
         signal_service.emit(
             "leaps_entry_opportunity",

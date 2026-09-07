@@ -218,6 +218,14 @@ Open Positions,Data,Summary,Stocks,USD,VOO,,12.5,1,590,7375,600,7500,125,,,,
 
 
 def test_ibkr_import_classifies_brk_puts_as_core_accumulation() -> None:
+    from app.api.market import get_market_provider, get_option_provider
+    from app.market.base import MarketDataError
+    from app.market.sample import SampleMarketDataProvider
+
+    class CoreProvider(SampleMarketDataProvider):
+        def option_quote(self, *args, **kwargs):
+            raise MarketDataError("No option quote in this test")
+
     report = '''Statement,Header,Field Name,Field Value
 Statement,Data,Period,"September 4, 2026"
 Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,Code
@@ -262,6 +270,20 @@ Open Positions,Data,Summary,Equity and Index Options,USD,BRK B 02OCT26 500 P,-1,
         assert portfolio["capital"]["wheel"]["committed"] == 0.0
         assert portfolio["capital"]["cash"]["occupied"] == 44000.0
         assert portfolio["capital"]["cash"]["margin_shortfall"] == 39000.0
+
+        provider = CoreProvider()
+        app.dependency_overrides[get_market_provider] = lambda: provider
+        app.dependency_overrides[get_option_provider] = lambda: provider
+        refreshed = client.post("/api/market/refresh")
+        assert refreshed.status_code == 200, refreshed.text
+        core = refreshed.json()["core"]
+        assert core["pending_put_collateral"] == 100000.0
+        assert core["unplanned_gap"] == 0
+        assert core["total_value"] == 0
+        assert core["mode"] == "accumulating"
+        assert not core["recommendation"]["actionable"]
+        assert core["sell_put"]["code"] == "pending_puts"
+        assert not core["sell_put"]["actionable"]
 
 
 def test_localized_statement_normalizes_headers_and_skips_aggregate_rows() -> None:

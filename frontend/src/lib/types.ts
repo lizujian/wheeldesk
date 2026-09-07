@@ -198,7 +198,7 @@ export interface CoreAssetDecision {
   below_ma200_two_days: boolean
   return_20d: number
   return_126d: number
-  code: 'monthly' | 'pullback' | 'correction' | 'deep' | 'cooldown' | 'waiting' | 'at_target'
+  code: 'monthly' | 'pullback' | 'correction' | 'deep' | 'cooldown' | 'waiting' | 'at_target' | 'pending_puts' | 'put_preferred'
   actionable: boolean
   fraction: number
   strategy_amount: number
@@ -214,6 +214,18 @@ export interface CoreStrategyDecision {
   total_target: number
   total_value: number
   target_gap: number
+  pending_put_collateral?: number
+  unplanned_gap?: number
+  sell_put?: {
+    code: string
+    actionable: boolean
+    symbol: string | null
+    reference_strike: number | null
+    collateral: number
+    direct_buy_reserve: number
+    contracts: number
+    dte_range: [number, number]
+  }
   full_threshold: number
   ratio_z: number
   route_confirmation_days: number
@@ -222,16 +234,28 @@ export interface CoreStrategyDecision {
   daily_limit_open: boolean
   recommendation: (CoreAssetDecision & { cash_required: number }) | null
   rotation: {
-    code: 'waiting' | 'watch' | 'cooldown' | 'reset_wait' | 'standard' | 'strong' | 'extreme'
+    code: string
     actionable: boolean
     sell_symbol: 'BRK.B' | 'VOO' | null
     buy_symbol: 'BRK.B' | 'VOO' | null
     amount: number
     sell_shares: number
     buy_shares: number
-    return_spread: number
-    defensive_half: boolean
-    cooldown_days_remaining: number
+    return_spread?: number
+    defensive_half?: boolean
+    cooldown_days_remaining?: number
+    ratio?: number | null
+    ratio_as_of?: string | null
+    band?: string | null
+    confirmation_days?: number
+    current_brk_weight?: number
+    projected_brk_weight?: number
+    target_brk_weight?: number
+    next_brk_weight?: number
+    weight_change?: number
+    used_weight?: number
+    remaining_weight?: number
+    executions?: Array<{ id: number; symbol: string; traded_at: string; quantity: number; price: number; proceeds: number; weight_change: number | null }>
   }
   assets: CoreAssetDecision[]
   core_available: number

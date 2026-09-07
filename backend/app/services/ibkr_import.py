@@ -27,6 +27,7 @@ from app.db_models import (
 )
 from app.domain.models import Bucket
 from app.domain.core import CORE_SYMBOLS
+from app.db_models import CoreTradeRecord
 from app.domain.trillion_club import is_club_symbol, is_wheel_club_symbol
 from app.services.portfolio_store import PortfolioStore
 from app.services.realized_cash import RealizedCashService
@@ -306,9 +307,76 @@ class IbkrImportService:
                     "entity_id": entity_id,
                 }
             )
+        if default_selection <= selected:
+            self._record_core_trades(parse_activity_statement(content))
         if account_summary:
             self._reconcile_account_summary(account_summary, filename)
         return {"imported": len(results), "results": results}
+
+    def _record_core_trades(self, rows: list[StatementRow]) -> None:
+        quantities = {symbol: ZERO for symbol in CORE_SYMBOLS}
+        has_snapshot = any(_section_key(row.section) == "open_positions" for row in rows)
+        trades = []
+        occurrences: dict[str, int] = {}
+        for row in rows:
+            contract = _contract(row.values)
+            if contract is None or contract.asset_type != "equity" or contract.symbol not in CORE_SYMBOLS:
+                continue
+            if _section_key(row.section) == "open_positions":
+                quantities[contract.symbol] += contract.quantity
+            elif _section_key(row.section) == "trades":
+                if _value(row.values, "DataDiscriminator").lower() not in {"", "order"}:
+                    continue
+                traded_at = _parse_datetime(_value(row.values, "Date/Time", "Trade Date", "Date"))
+                if traded_at is None or contract.quantity == ZERO or contract.cost_price <= ZERO:
+                    continue
+                key = json.dumps([
+                    contract.symbol, traded_at.isoformat(),
+                    str(contract.quantity.normalize()), str(contract.cost_price.normalize()),
+                    _value(row.values, "Currency"),
+                ])
+                occurrences[key] = occurrences.get(key, 0) + 1
+                fingerprint = hashlib.sha256(f"{key}:{occurrences[key]}".encode()).hexdigest()
+                trades.append((traded_at, row.row_index, fingerprint, contract))
+        ending_quantities = quantities.copy()
+        new_sales = set()
+        # Reverse the report's executions from its ending stock snapshot.
+        for traded_at, _, fingerprint, contract in sorted(trades, reverse=True, key=lambda value: value[:2]):
+            quantities[contract.symbol] -= contract.quantity
+            pre = {symbol: str(value) for symbol, value in quantities.items()} if has_snapshot and all(value >= ZERO for value in quantities.values()) else None
+            record = self.session.scalar(select(CoreTradeRecord).where(CoreTradeRecord.fingerprint == fingerprint))
+            if record is None:
+                if contract.quantity < ZERO:
+                    new_sales.add(fingerprint)
+                self.session.add(CoreTradeRecord(
+                    fingerprint=fingerprint, symbol=contract.symbol, traded_at=traded_at,
+                    quantity=contract.quantity, price=contract.cost_price, pre_quantities=pre,
+                ))
+            elif record.pre_quantities is None and pre is not None:
+                record.pre_quantities = pre
+        if has_snapshot:
+            from app.services.core_rebalancing import CoreRebalancingService
+
+            for symbol, ending_quantity in ending_quantities.items():
+                sales = [(stamp, contract) for stamp, _, fingerprint, contract in trades
+                         if contract.symbol == symbol and fingerprint in new_sales]
+                if ending_quantity != ZERO or not sales:
+                    continue
+                held = list(self.session.scalars(select(PositionRecord).where(
+                    PositionRecord.bucket == Bucket.CORE.value, PositionRecord.symbol == symbol,
+                    PositionRecord.asset_type == "equity", PositionRecord.status == "open",
+                )))
+                quantity = sum((record.quantity for record in held), ZERO)
+                sold_quantity = sum((abs(contract.quantity) for _, contract in sales), ZERO)
+                sold_on = max(stamp.date() for stamp, _ in sales)
+                if quantity <= ZERO or sold_quantity < quantity or any(
+                    record.opened_on > sold_on or (record.quote_as_of and record.quote_as_of.date() > sold_on)
+                    for record in held
+                ):
+                    continue
+                price = sum((abs(contract.quantity) * contract.cost_price for _, contract in sales), ZERO) / sold_quantity
+                CoreRebalancingService(self.session).sell_fifo(sold_on, quantity, price, symbol)
+        self.session.commit()
 
     def import_all(self, filename: str, content: str) -> dict[str, Any]:
         snapshot = self.preview(filename, content)

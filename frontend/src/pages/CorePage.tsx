@@ -50,6 +50,7 @@ export function CorePage({ portfolio, market, positions, overview }: {
 
     <CoreRelativeBoard decision={market?.core ?? null} />
     <CoreBuySignal decision={market?.core ?? null} />
+    <CorePutSignal decision={market?.core ?? null} />
     <CoreRotationSignal decision={market?.core ?? null} />
 
     <section className="core-lot-register">
@@ -125,8 +126,9 @@ function CoreBuySignal({ decision }: { decision: CoreStrategyDecision | null }) 
   const recommendation = decision?.recommendation
   if (!decision) return <section className="core-signal waiting" aria-label="核心仓买入建议"><Gauge size={19} /><div><span>等待行情</span><strong>刷新后计算新增资金优先标的</strong></div></section>
   if (decision.mode === 'full') return <section className="core-signal waiting" aria-label="核心仓买入建议"><Gauge size={19} /><div><span>核心仓已满</span><strong>暂停普通定投，转入满仓轮换监控</strong><small>满仓阈值 {formatMoney(decision.full_threshold)}</small></div></section>
+  if ((decision.pending_put_collateral ?? 0) > 0 && !recommendation?.actionable) return <section className="core-signal waiting" aria-label="核心仓买入建议"><ShieldCheck size={20} /><div><span>已有 Put 建仓安排</span><strong>{decision.unplanned_gap === 0 ? '待接股安排已覆盖目标，暂无新增容量' : '暂停常规定投，等待明显回调机会'}</strong><small>待接股担保 {formatMoney(decision.pending_put_collateral ?? 0)} · 未安排缺口 {formatMoney(decision.unplanned_gap ?? 0)}</small></div></section>
   if (!recommendation) return <section className="core-signal waiting" aria-label="核心仓买入建议"><Gauge size={19} /><div><span>等待</span><strong>当前没有可执行的新增买入建议</strong></div></section>
-  const amountNote = `${recommendation.trend_reduced ? '趋势保护减半 · ' : ''}使用目标缺口的 ${(recommendation.fraction * 100).toFixed(1)}%${recommendation.cash_required > 0 ? ` · 需从现金转入 ${formatMoney(recommendation.cash_required)}` : ''}`
+  const amountNote = `${recommendation.trend_reduced ? '趋势保护减半 · ' : ''}使用${decision.pending_put_collateral ? '扣除待接股后的缺口' : '目标缺口'}的 ${(recommendation.fraction * 100).toFixed(1)}%${recommendation.cash_required > 0 ? ` · 需从现金转入 ${formatMoney(recommendation.cash_required)}` : ''}`
   return <section className={`core-signal ${recommendation.actionable ? 'actionable' : 'waiting'}`} aria-label="核心仓买入建议">
     <TrendingUp size={20} />
     <div><span>{coreBuyLabel(recommendation)} · {recommendation.symbol}</span><strong>{recommendation.actionable ? `下一笔优先买入 ${recommendation.symbol}` : '当前无需新增买入'}</strong><small>日涨跌 {formatPercent(recommendation.daily_change)} · 回撤 {formatPercent(-recommendation.drawdown)} · RSI {recommendation.rsi14.toFixed(1)}</small></div>
@@ -135,14 +137,37 @@ function CoreBuySignal({ decision }: { decision: CoreStrategyDecision | null }) 
   </section>
 }
 
+function CorePutSignal({ decision }: { decision: CoreStrategyDecision | null }) {
+  const put = decision?.sell_put
+  if (!put) return null
+  const labels: Record<string, string> = {
+    waiting: '等待普通回调与上行趋势', pending_puts: '已有待接股安排，暂不追加 Put',
+    direct_buy_preferred: '回调较深，优先评估直接买股', no_support: '暂无合适的支撑参考',
+    insufficient_reserve: '预留直接买股资金后，不足担保 1 张 Put', opportunity: '可评估 Sell Put 建仓',
+  }
+  return <section className={`core-signal ${put.actionable ? 'actionable' : 'waiting'}`} aria-label="核心仓 Sell Put 建议">
+    <ShieldCheck size={20} />
+    <div><span>Sell Put 建仓{put.symbol ? ` · ${put.symbol}` : ''}</span><strong>{labels[put.code] ?? '等待'}</strong><small>7～21 天 · 每次 1 张 · 接股后归核心仓</small></div>
+    {put.reference_strike != null && <div><span>行权价上限参考</span><strong>{formatMoney(put.reference_strike)}</strong><small>按实际挂牌行权价向下选择</small></div>}
+    <div><span>{put.reference_strike != null ? '参考接股资金' : '直接买股资金预留'}</span><strong>{formatMoney(put.reference_strike != null ? put.collateral : put.direct_buy_reserve)}</strong><small>{put.reference_strike != null ? `保留直接买股资金至少 ${formatMoney(put.direct_buy_reserve)}` : '可用策略资金的 50%'}</small></div>
+  </section>
+}
+
 function CoreRotationSignal({ decision }: { decision: CoreStrategyDecision | null }) {
   const rotation = decision?.rotation
-  const labels: Record<string, string> = { waiting: '等待核心仓满仓', watch: '相对偏离观察中', cooldown: '轮换冷却期', reset_wait: '等待相对比率回归中性区', standard: '标准轮换', strong: '强轮换', extreme: '极端轮换' }
+  const labels: Record<string, string> = { waiting: '核心仓未满，暂不轮动', invalid_data: '等待有效的同日收盘行情', neutral: '比率处于保持区间', within_target: '权重已满足当前档位', confirming: '等待连续 3 个交易日确认', pending_puts: '待接股可能抵消轮动，先观察', execution_unverified: '成交前仓位不完整，暂缓轮动', daily_limit: '当日已有核心仓成交', window_limit: '近 20 个交易日额度已用完', weight_constraint: '当前额度无法同时满足权重约束', opportunity: '可评估分批轮动' }
+  const weight = (value: number | undefined) => value == null ? '—' : `${(value * 100).toFixed(1)}%`
   return <section className={`core-rotation ${rotation?.actionable ? 'actionable' : ''}`} aria-label="核心仓满仓轮换建议">
-    <header><ArrowRightLeft size={19} /><div><span>FULL CORE ROTATION</span><strong>{rotation ? labels[rotation.code] : '等待行情'}</strong><small>{decision?.mode === 'full' ? `轮换确认 ${decision.rotation_confirmation_days} 日 · 半年收益差 ${formatPercent(rotation?.return_spread ?? 0)}` : '核心仓达到目标的 98% 后启用'}</small></div></header>
-    <div><span>轮换方向</span><strong>{rotation?.sell_symbol && rotation.buy_symbol ? `${rotation.sell_symbol} → ${rotation.buy_symbol}` : '暂不轮换'}</strong><small>{rotation?.defensive_half ? '目标标的连续两日低于 MA200，建议金额已减半' : '卖出与买入金额等额'}</small></div>
-    <div><span>建议金额</span><strong>{formatMoney(rotation?.amount ?? 0)}</strong><small>{rotation?.cooldown_days_remaining ? `冷却期剩余 ${rotation.cooldown_days_remaining} 个交易日` : '系统建议，用户确认'}</small></div>
-    <div><span>估算双腿</span><strong>{rotation?.sell_symbol ? `卖 ${rotation.sell_shares.toFixed(4)} · 买 ${rotation.buy_shares.toFixed(4)} 股` : '等待触发'}</strong><small>券商成交后由 IBKR 报表同步</small></div>
+    <header><ArrowRightLeft size={19} /><div><span>BRK.B / VOO ROTATION</span><strong>{rotation ? labels[rotation.code] ?? '等待行情' : '等待行情'}</strong><small>核心股票市值达到目标的 98% 后启用</small></div></header>
+    <div><span>收盘比率 / 确认</span><strong>{rotation?.ratio?.toFixed(4) ?? '—'} · {rotation?.confirmation_days ?? 0} / 3 日</strong><small>{rotation?.ratio_as_of ?? '等待刷新'} · BRK.B ÷ VOO</small></div>
+    <div><span>BRK.B 当前 / 全部接股后</span><strong>{weight(rotation?.current_brk_weight)} / {weight(rotation?.projected_brk_weight)}</strong><small>权重分母仅为两只核心股票市值</small></div>
+    <div><span>BRK.B 档位目标 / 本次调整后</span><strong>{weight(rotation?.target_brk_weight)} / {weight(rotation?.next_brk_weight)}</strong><small>2 个百分点以内不调整</small></div>
+    <div><span>轮动方向</span><strong>{rotation?.sell_symbol && rotation.buy_symbol ? `${rotation.sell_symbol} → ${rotation.buy_symbol}` : '暂不轮动'}</strong><small>卖出与买入金额等额</small></div>
+    <div><span>建议金额 / 权重变化</span><strong>{formatMoney(rotation?.amount ?? 0)} · {weight(rotation?.weight_change)}</strong><small>每 20 个交易日累计最多 20 个百分点</small></div>
+    <div><span>窗口已使用 / 剩余</span><strong>{weight(rotation?.used_weight)} / {weight(rotation?.remaining_weight)}</strong><small>按实际卖出成交统计，不按提醒次数</small></div>
+    <div><span>估算双腿</span><strong>{rotation?.actionable ? `卖 ${rotation.sell_shares.toFixed(4)} · 买 ${rotation.buy_shares.toFixed(4)} 股` : '等待触发'}</strong><small>实际成交由 IBKR 报表同步</small></div>
+    <footer><span>比率 ≥ 0.78 / 0.83 / 0.88：BRK.B 目标 80% / 55% / 30%</span><span>比率 ≤ 0.72 / 0.68 / 0.65：BRK.B 目标 70% / 85% / 100%</span><small>0.72～0.78 保持 · 固定档位尚未经过回测验证</small></footer>
+    {!!rotation?.executions?.length && <div className="core-rotation-executions"><strong>近 20 个交易日核心股票卖出</strong><table><thead><tr><th>成交时间</th><th>标的</th><th>卖出股数</th><th>成交价</th><th>成交金额</th><th>额度占用</th></tr></thead><tbody>{rotation.executions.map((trade) => <tr key={trade.id}><td>{trade.traded_at.replace('T', ' ')}</td><td>{trade.symbol}</td><td>{trade.quantity}</td><td>{formatMoney(trade.price)}</td><td>{formatMoney(trade.proceeds)}</td><td>{trade.weight_change == null ? '待核对' : weight(trade.weight_change)}</td></tr>)}</tbody></table><small>额度分母：成交前核心股数；卖出标的按成交价，另一标的按成交日收盘价估算。</small></div>}
   </section>
 }
 
@@ -168,6 +193,6 @@ function daysBetween(start: string, end: string) { return Math.round((Date.parse
 function coreBuyLabel(asset: Pick<CoreAssetDecision, 'code' | 'fraction'>) {
   if (asset.code === 'monthly' && asset.fraction <= .025) return '高位极轻定投'
   if (asset.code === 'monthly' && asset.fraction <= .05) return '高位轻仓定投'
-  const labels: Record<string, string> = { monthly: '常规定投', pullback: '普通回调', correction: '明显调整', deep: '深度回撤', cooldown: '冷却期', waiting: '等待', at_target: '目标已满' }
+  const labels: Record<string, string> = { monthly: '常规定投', pullback: '普通回调', correction: '明显调整', deep: '深度回撤', cooldown: '冷却期', waiting: '等待', at_target: '目标已满', pending_puts: '已有 Put 建仓安排', put_preferred: '优先评估 Sell Put' }
   return labels[asset.code] ?? asset.code
 }

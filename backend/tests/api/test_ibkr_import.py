@@ -286,6 +286,125 @@ Open Positions,Data,Summary,Equity and Index Options,USD,BRK B 02OCT26 500 P,-1,
         assert not core["sell_put"]["actionable"]
 
 
+def test_ibkr_import_classifies_spy_put_as_core_acquisition() -> None:
+    report = '''Statement,Header,Field Name,Field Value
+Statement,Data,Period,"September 14, 2026"
+Open Positions,Header,DataDiscriminator,Asset Category,Currency,Symbol,Quantity,Mult,Cost Price,Cost Basis,Close Price,Value,Unrealized P/L,Expiry,Strike,Put/Call,Code
+Open Positions,Data,Summary,Equity and Index Options,USD,SPY 02OCT26 735 P,-1,100,3.69,-369,3.11,-311,58,2026-10-02,735,P,
+'''
+    with import_client() as client:
+        preview = client.post(
+            "/api/imports/ibkr/preview",
+            json={"filename": "spy-core-put.csv", "content": report},
+        ).json()
+        put = preview["rows"][0]
+        assert put["action"] == "create_wheel_put"
+        assert put["details"]["capital_bucket"] == "core"
+        assert "核心仓 Sell Put 建仓" in put["message"]
+
+        imported = client.post(
+            "/api/imports/ibkr/auto",
+            json={"filename": "spy-core-put.csv", "content": report},
+        )
+        assert imported.status_code == 200, imported.text
+        assert imported.json()["needs_attention"] == 0
+        wheel = client.get("/api/wheel/overview").json()
+        assert wheel["core_puts"][0]["symbol"] == "SPY"
+        assert client.get("/api/other-holdings").json()["records"] == []
+
+
+def test_ibkr_import_classifies_and_closes_leaps_sell_call() -> None:
+    long_report = '''Statement,Header,Field Name,Field Value
+Statement,Data,Period,"August 31, 2026"
+Open Positions,Header,DataDiscriminator,Asset Category,Currency,Symbol,Quantity,Mult,Cost Price,Cost Basis,Close Price,Value,Unrealized P/L,Expiry,Strike,Put/Call,Code
+Open Positions,Data,Summary,Equity and Index Options,USD,GOOG 19MAR27 330 C,1,100,38.86,3886,36.88,3688,-198,2027-03-19,330,C,
+'''
+    short_report = '''Statement,Header,Field Name,Field Value
+Statement,Data,Period,"September 14, 2026"
+Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,Code
+Trades,Data,Order,Equity and Index Options,USD,GOOG 02OCT26 360 C,"2026-09-14, 10:30:00",-1,3.5,3.5,350,0,-350,0,0,O
+Open Positions,Header,DataDiscriminator,Asset Category,Currency,Symbol,Quantity,Mult,Cost Price,Cost Basis,Close Price,Value,Unrealized P/L,Expiry,Strike,Put/Call,Code
+Open Positions,Data,Summary,Equity and Index Options,USD,GOOG 02OCT26 360 C,-1,100,3.5,-350,3.975,-397.5,-47.5,2026-10-02,360,C,
+'''
+    close_report = '''Statement,Header,Field Name,Field Value
+Statement,Data,Period,"September 15, 2026"
+Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,Code
+Trades,Data,Order,Equity and Index Options,USD,GOOG 02OCT26 360 C,"2026-09-15, 10:30:00",1,2.0,2.0,-200,0,350,150,0,C
+'''
+    with import_client() as client:
+        assert client.post(
+            "/api/imports/ibkr/auto",
+            json={"filename": "goog-long.csv", "content": long_report},
+        ).status_code == 200
+        preview = client.post(
+            "/api/imports/ibkr/preview",
+            json={"filename": "goog-short.csv", "content": short_report},
+        ).json()
+        short_call = next(row for row in preview["rows"] if row["action"] == "create_leaps_call")
+        assert short_call["details"]["linked_position_id"] is not None
+        assert "LEAPS Sell Call 轮动" in short_call["message"]
+
+        imported = client.post(
+            "/api/imports/ibkr/auto",
+            json={"filename": "goog-short.csv", "content": short_report},
+        )
+        assert imported.status_code == 200, imported.text
+        listing = client.get("/api/other-holdings?include_closed=true").json()
+        assert listing["records"] == []
+        assert listing["leaps_call_wheels"][0]["category"] == "leaps_call_wheel"
+
+        closed = client.post(
+            "/api/imports/ibkr/auto",
+            json={"filename": "goog-close.csv", "content": close_report},
+        )
+        assert closed.status_code == 200, closed.text
+        assert closed.json()["needs_attention"] == 0
+        listing = client.get("/api/other-holdings?include_closed=true").json()
+        call = listing["leaps_call_wheels"][0]
+        assert call["status"] == "closed"
+        assert call["realized_profit"] == 150.0
+        assert client.get("/api/profit-ledger").json()["summary"]["leaps_realized"] == 150.0
+
+
+def test_ibkr_import_classifies_qld_sell_call_as_leaps_wheel() -> None:
+    qld_report = '''Statement,Header,Field Name,Field Value
+Statement,Data,Period,"July 29, 2026"
+Open Positions,Header,DataDiscriminator,Asset Category,Currency,Symbol,Quantity,Mult,Cost Price,Cost Basis,Close Price,Value,Unrealized P/L,Expiry,Strike,Put/Call,Code
+Open Positions,Data,Summary,Stocks,USD,QLD,100,1,79.36,7936,89.55,8955,1019,,,,
+'''
+    call_report = '''Statement,Header,Field Name,Field Value
+Statement,Data,Period,"September 4, 2026"
+Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,Code
+Trades,Data,Order,Equity and Index Options,USD,QLD 18SEP26 90 C,"2026-09-04, 10:30:00",-1,2.12,2.12,212,0,-212,0,0,O
+Open Positions,Header,DataDiscriminator,Asset Category,Currency,Symbol,Quantity,Mult,Cost Price,Cost Basis,Close Price,Value,Unrealized P/L,Expiry,Strike,Put/Call,Code
+Open Positions,Data,Summary,Equity and Index Options,USD,QLD 18SEP26 90 C,-1,100,2.12,-212,2.64,-264,-52,2026-09-18,90,C,
+'''
+    with import_client() as client:
+        qld = client.post(
+            "/api/imports/ibkr/auto",
+            json={"filename": "qld-stock.csv", "content": qld_report},
+        )
+        assert qld.status_code == 200, qld.text
+
+        preview = client.post(
+            "/api/imports/ibkr/preview",
+            json={"filename": "qld-call.csv", "content": call_report},
+        ).json()
+        call = next(row for row in preview["rows"] if row["action"] == "create_leaps_call")
+        assert call["details"]["linked_position_id"] is not None
+        assert "LEAPS Sell Call 轮动" in call["message"]
+
+        imported = client.post(
+            "/api/imports/ibkr/auto",
+            json={"filename": "qld-call.csv", "content": call_report},
+        )
+        assert imported.status_code == 200, imported.text
+        listing = client.get("/api/other-holdings?include_closed=true").json()
+        assert listing["records"] == []
+        assert listing["leaps_call_wheels"][0]["symbol"] == "QLD"
+        assert listing["leaps_call_wheels"][0]["linked_position_id"] is not None
+
+
 def test_localized_statement_normalizes_headers_and_skips_aggregate_rows() -> None:
     with import_client() as client:
         preview_response = client.post(
@@ -861,8 +980,8 @@ Open Positions,Data,Summary,Equity and Index Options,USD,IBM  270115P00240000,IB
         cash = client.get("/api/portfolio/summary").json()["capital"]["cash"]
         assert cash["total"] == 5000.0
         assert cash["cash_equivalent"] == 20000.0
-        assert cash["liquid"] == 0.0
-        assert cash["available"] == 0.0
+        assert cash["liquid"] == 5000.0
+        assert cash["available"] == 5000.0
 
         boxx = records[("BOXX", "equity", None)]
         changed = client.patch(

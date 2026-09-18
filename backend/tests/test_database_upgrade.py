@@ -1,12 +1,13 @@
 from datetime import date
 from pathlib import Path
 
-from sqlalchemy import inspect
+from sqlalchemy import func, inspect, select
 from sqlalchemy.orm import Session
 
 from app.db import create_database_engine, initialize_database
 from app.db_models import (
     Base,
+    BrokerImportRecord,
     BucketBalance,
     OtherHoldingRecord,
     PortfolioProfile,
@@ -218,6 +219,169 @@ def test_initialize_database_migrates_legacy_other_holdings_once(tmp_path: Path)
         assert records[1].symbol == "BOXX"
         assert records[1].category == "cash_equivalent"
         assert {record.legacy_other_holding_id for record in records} == {1, 2}
+
+
+def test_initialize_database_reclassifies_existing_core_put_and_leaps_call(
+    tmp_path: Path,
+) -> None:
+    engine = create_database_engine(tmp_path / "strategy-taxonomy.db")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        session.add(
+            PositionRecord(
+                bucket="leaps",
+                symbol="GOOG",
+                asset_type="option",
+                direction="long",
+                option_type="call",
+                quantity=1,
+                multiplier=100,
+                entry_price=38.86,
+                current_price=36.88,
+                opened_on=date(2026, 8, 31),
+                expiration=date(2027, 3, 19),
+                strike=330,
+                tranche=1,
+                entry_fees=0,
+            )
+        )
+        session.flush()
+        session.add(
+            PositionRecord(
+                bucket="leaps",
+                symbol="QLD",
+                asset_type="equity",
+                direction="long",
+                option_type=None,
+                quantity=100,
+                multiplier=1,
+                entry_price=79.36,
+                current_price=89.55,
+                opened_on=date(2026, 7, 29),
+                tranche=1,
+                entry_fees=0,
+            )
+        )
+        session.flush()
+        session.add_all(
+            [
+                UnmanagedPositionRecord(
+                    category="other",
+                    symbol="GOOG",
+                    asset_type="option",
+                    direction="short",
+                    option_type="call",
+                    quantity=1,
+                    multiplier=100,
+                    entry_price=3.5,
+                    current_price=3.975,
+                    opened_on=date(2026, 9, 14),
+                    expiration=date(2026, 10, 2),
+                    strike=360,
+                ),
+                UnmanagedPositionRecord(
+                    category="other",
+                    symbol="SPY",
+                    asset_type="option",
+                    direction="short",
+                    option_type="put",
+                    quantity=1,
+                    multiplier=100,
+                    entry_price=3.69,
+                    current_price=3.11,
+                    opened_on=date(2026, 9, 14),
+                    expiration=date(2026, 10, 2),
+                    strike=735,
+                ),
+                UnmanagedPositionRecord(
+                    category="other",
+                    symbol="QLD",
+                    asset_type="option",
+                    direction="short",
+                    option_type="call",
+                    quantity=1,
+                    multiplier=100,
+                    entry_price=3.3896,
+                    current_price=1.65,
+                    opened_on=date(2026, 8, 27),
+                    expiration=date(2026, 9, 18),
+                    strike=90,
+                    status="closed",
+                    closed_on=date(2026, 9, 1),
+                    exit_price=1.65,
+                    realized_profit=173.96,
+                ),
+            ]
+        )
+        session.flush()
+        session.add_all(
+            [
+                BrokerImportRecord(
+                    fingerprint="g" * 64,
+                    filename="goog.csv",
+                    section="Open Positions",
+                    row_index=1,
+                    action="create_unmanaged",
+                    entity_type="unmanaged_position",
+                    entity_id=1,
+                ),
+                BrokerImportRecord(
+                    fingerprint="s" * 64,
+                    filename="spy.csv",
+                    section="Open Positions",
+                    row_index=1,
+                    action="create_unmanaged",
+                    entity_type="unmanaged_position",
+                    entity_id=2,
+                ),
+                BrokerImportRecord(
+                    fingerprint="q" * 64,
+                    filename="qld.csv",
+                    section="Open Positions",
+                    row_index=1,
+                    action="create_unmanaged",
+                    entity_type="unmanaged_position",
+                    entity_id=3,
+                ),
+            ]
+        )
+        session.commit()
+
+    initialize_database(engine)
+    initialize_database(engine)
+
+    with Session(engine) as session:
+        goog = session.scalar(
+            select(UnmanagedPositionRecord).where(
+                UnmanagedPositionRecord.symbol == "GOOG"
+            )
+        )
+        puts = list(
+            session.scalars(select(WheelPutLot).where(WheelPutLot.symbol == "SPY"))
+        )
+        qld = session.scalar(
+            select(UnmanagedPositionRecord).where(
+                UnmanagedPositionRecord.symbol == "QLD"
+            )
+        )
+        imported = list(
+            session.scalars(select(BrokerImportRecord).order_by(BrokerImportRecord.id))
+        )
+
+        assert goog is not None
+        assert goog.category == "leaps_call_wheel"
+        assert goog.linked_position_id == 1
+        assert qld is not None
+        assert qld.category == "leaps_call_wheel"
+        assert qld.linked_position_id == 2
+        assert qld.status == "closed"
+        assert len(puts) == 1
+        assert puts[0].capital_bucket == "core"
+        assert puts[0].symbol == "SPY"
+        assert session.scalar(select(func.count(UnmanagedPositionRecord.id))) == 2
+        assert imported[0].entity_type == "leaps_call_wheel"
+        assert imported[1].entity_type == "wheel_put"
+        assert imported[2].entity_type == "leaps_call_wheel"
 
 
 def test_initialize_database_distributes_legacy_unallocated_once_and_preserves_trades(

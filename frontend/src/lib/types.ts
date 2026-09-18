@@ -264,7 +264,7 @@ export interface CoreStrategyDecision {
 
 export interface OtherHolding {
   id: number
-  category: 'cash_equivalent' | 'other'
+  category: 'cash_equivalent' | 'other' | 'leaps_call_wheel'
   symbol: string
   asset_type: 'equity' | 'option'
   direction: 'long' | 'short'
@@ -287,6 +287,7 @@ export interface OtherHolding {
   quote_as_of: string | null
   quote_status: 'updated' | 'stale' | 'unavailable'
   last_error: string | null
+  linked_position_id?: number | null
 }
 
 export interface OtherHoldingListing {
@@ -295,6 +296,7 @@ export interface OtherHoldingListing {
   cash_equivalent_value: number
   other_value: number
   unpriced_count: number
+  leaps_call_wheels?: OtherHolding[]
 }
 
 export interface WheelCycle {

@@ -20,6 +20,9 @@ MONTHLY_FRACTIONS = (
 )
 TIER_RANK = {"monthly": 1, "pullback": 2, "put": 2, "correction": 3, "deep": 4}
 CORE_SYMBOLS = ("BRK.B", "VOO")
+# Core acquisition puts may target SPY even though the long-term core stock
+# rotation universe remains BRK.B / VOO.
+CORE_PUT_SYMBOLS = (*CORE_SYMBOLS, "SPY")
 
 
 @dataclass(frozen=True)

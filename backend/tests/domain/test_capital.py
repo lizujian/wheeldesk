@@ -25,6 +25,18 @@ def test_cash_capacity_reports_available_cash_and_margin_shortfall() -> None:
     assert status.margin_shortfall == Decimal("47400.00")
 
 
+def test_cash_equivalent_is_available_for_cash_bucket_allocation() -> None:
+    status = cash_capacity(
+        Decimal("5000"),
+        cash_equivalent=Decimal("20000"),
+    )
+
+    assert status.total == Decimal("5000.00")
+    assert status.cash_equivalent == Decimal("20000.00")
+    assert status.liquid == Decimal("5000.00")
+    assert status.available == Decimal("5000.00")
+
+
 def test_loss_reduces_strategy_first_and_then_cash_without_negative_balances() -> None:
     within_bucket = apply_loss(Decimal("20400"), Decimal("30000"), Decimal("6000"))
     beyond_bucket = apply_loss(Decimal("4000"), Decimal("30000"), Decimal("6500"))

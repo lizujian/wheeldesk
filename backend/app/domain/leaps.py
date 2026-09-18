@@ -3,6 +3,7 @@ from datetime import date
 from decimal import Decimal
 
 ZERO = Decimal("0")
+LEAPS_CALL_WHEEL_CATEGORY = "leaps_call_wheel"
 
 
 @dataclass(frozen=True)

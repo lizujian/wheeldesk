@@ -35,7 +35,7 @@ export function OtherHoldingsPage({ listing }: {
     </div>
 
     <section className="other-summary" aria-label="其他持仓汇总">
-      <SummaryMetric icon={<Banknote size={18} />} label="BOXX 现金等价物" value={listing.cash_equivalent_value} note="计入现金类，不视为可直接动用" tone="cash" />
+      <SummaryMetric icon={<Banknote size={18} />} label="BOXX 现金等价物" value={listing.cash_equivalent_value} note="计入现金桶，可参与资金分配" tone="cash" />
       <SummaryMetric icon={<Layers3 size={18} />} label="其他持仓净值" value={listing.other_value} note={`${openRecords.filter((record) => record.category === 'other').length} 笔待退出持仓`} />
       <SummaryMetric icon={floatingProfit >= 0 ? <TrendingUp size={18} /> : <TrendingDown size={18} />} label="未实现盈亏" value={floatingProfit} note="按报表价或最近一次行情" tone={floatingProfit >= 0 ? 'positive' : 'negative'} />
       <SummaryMetric icon={<Archive size={18} />} label="退出记录" value={closedCount} note={listing.unpriced_count ? `${listing.unpriced_count} 笔暂无有效报价` : '当前持仓均有估值'} count />

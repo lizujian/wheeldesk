@@ -26,7 +26,8 @@ from app.db_models import (
     WheelShareLot,
 )
 from app.domain.models import Bucket
-from app.domain.core import CORE_SYMBOLS
+from app.domain.core import CORE_PUT_SYMBOLS, CORE_SYMBOLS
+from app.domain.leaps import LEAPS_CALL_WHEEL_CATEGORY
 from app.db_models import CoreTradeRecord
 from app.domain.trillion_club import is_club_symbol, is_wheel_club_symbol
 from app.services.portfolio_store import PortfolioStore
@@ -574,6 +575,9 @@ class IbkrImportService:
                         position_roll,
                     )
                 return self._preview_leaps(row, contract, opened_on, date_confidence, used_slots)
+            leaps_call = self._preview_leaps_call(row, contract, opened_on, date_confidence)
+            if leaps_call is not None:
+                return leaps_call
             return self._preview_covered_call(row, contract, opened_on, date_confidence)
         if (
             contract.asset_type == "option"
@@ -905,7 +909,7 @@ class IbkrImportService:
         opened_on: date,
         confidence: str,
     ) -> dict[str, Any]:
-        is_core_put = contract.symbol in CORE_SYMBOLS
+        is_core_put = contract.symbol in CORE_PUT_SYMBOLS
         if not is_core_put and contract.symbol != "TQQQ" and not is_wheel_club_symbol(contract.symbol):
             return self._preview_unmanaged(row, contract, opened_on, confidence)
         existing_rows = self._matching_puts(contract)
@@ -1003,7 +1007,7 @@ class IbkrImportService:
             selected=True,
             can_import=True,
             message=(
-                "新增核心仓 Sell Put 建仓；接股后转入核心仓，禁止自动 Covered Call"
+            "新增核心仓 Sell Put 建仓；接股后转入核心仓，禁止自动 Covered Call"
                 if is_core_put
                 else
                 "新增 Sell Put；报表未提供开仓正股价与财报确认，保留为待刷新参考"
@@ -1024,7 +1028,7 @@ class IbkrImportService:
         roll: PutRoll,
     ) -> dict[str, Any]:
         if (
-            position_contract.symbol not in CORE_SYMBOLS
+            position_contract.symbol not in CORE_PUT_SYMBOLS
             and position_contract.symbol != "TQQQ"
             and not is_wheel_club_symbol(position_contract.symbol)
         ):
@@ -1121,7 +1125,7 @@ class IbkrImportService:
                 previous.capital_bucket
                 if previous
                 else Bucket.CORE.value
-                if roll.opening_contract.symbol in CORE_SYMBOLS
+                if roll.opening_contract.symbol in CORE_PUT_SYMBOLS
                 else Bucket.WHEEL.value
             ),
             "asset_type": "option",
@@ -1146,6 +1150,69 @@ class IbkrImportService:
             ),
             "earnings_confirmed": previous.earnings_confirmed if previous else False,
         }
+
+    def _preview_leaps_call(
+        self,
+        row: StatementRow,
+        contract: Contract,
+        opened_on: date,
+        confidence: str,
+    ) -> dict[str, Any] | None:
+        """Classify a short call covered by a LEAPS call or QLD replacement."""
+        quantity = abs(int(contract.quantity))
+        existing = self._matching_leaps_calls(contract)
+        if len(existing) > 1:
+            return self._item(
+                row,
+                instrument=_instrument_label(contract),
+                action="skip",
+                status="review",
+                confidence="low",
+                selected=False,
+                can_import=False,
+                message="同一 LEAPS Sell Call 合约存在多条记录，需要人工核对",
+                details=_contract_details(contract, opened_on),
+            )
+        details = _contract_details(contract, opened_on)
+        details.update(
+            category=LEAPS_CALL_WHEEL_CATEGORY,
+            direction="short",
+            holding_id=existing[0].id if existing else None,
+            linked_position_id=existing[0].linked_position_id if existing else None,
+        )
+        if existing:
+            record = existing[0]
+            exact = record.quantity == quantity and _price_matches(
+                record.entry_price, contract.cost_price
+            )
+            return self._item(
+                row,
+                instrument=_instrument_label(contract),
+                action="skip" if exact else "update_leaps_call",
+                status="matched" if exact else "ready",
+                confidence="exact" if exact else confidence,
+                selected=not exact,
+                can_import=not exact,
+                message="LEAPS Sell Call 已经一致" if exact else "更新 LEAPS Sell Call",
+                details=details,
+            )
+
+        candidate = self._single_covering_leaps_position(contract.symbol, quantity)
+        if candidate is None:
+            return None
+        details["linked_position_id"] = candidate.id
+        return self._item(
+            row,
+            instrument=_instrument_label(contract),
+            action="create_leaps_call",
+            status="ready",
+            confidence=confidence,
+            selected=True,
+            can_import=True,
+            message=f"新增 {contract.symbol} LEAPS Sell Call 轮动，关联 Long Call #{candidate.id}",
+            details=details,
+        )
+
     def _preview_covered_call(
         self,
         row: StatementRow,
@@ -1336,6 +1403,27 @@ class IbkrImportService:
                 )
 
         if contract.option_type == "call" and contract.quantity > ZERO:
+            leaps_calls = self._matching_leaps_calls(contract)
+            if len(leaps_calls) == 1 and leaps_calls[0].quantity == quantity:
+                record = leaps_calls[0]
+                details["holding_id"] = record.id
+                details["linked_position_id"] = record.linked_position_id
+                details["realized_profit"] = float(
+                    (record.entry_price - contract.cost_price)
+                    * HUNDRED
+                    * quantity
+                )
+                return self._item(
+                    row,
+                    instrument=_instrument_label(contract),
+                    action="close_leaps_call",
+                    status="ready",
+                    confidence="exact",
+                    selected=True,
+                    can_import=True,
+                    message=f"LEAPS Sell Call 买回平仓，预计已实现 ${details['realized_profit']:,.2f}",
+                    details=details,
+                )
             calls = self._matching_calls(contract)
             if len(calls) == 1 and calls[0].quantity == int(quantity):
                 record = calls[0]
@@ -1462,6 +1550,8 @@ class IbkrImportService:
             return "position", self._apply_position(action, details)
         if action in {"create_unmanaged", "update_unmanaged"}:
             return "unmanaged_position", self._apply_unmanaged(action, details)
+        if action in {"create_leaps_call", "update_leaps_call"}:
+            return "leaps_call_wheel", self._apply_leaps_call(action, details)
         if action in {"create_wheel_put", "update_wheel_put", "roll_wheel_put"}:
             return "wheel_put", self._apply_put(action, details)
         if action in {"create_wheel_call", "update_wheel_call"}:
@@ -1480,6 +1570,8 @@ class IbkrImportService:
                 Decimal(str(details["exit_price"])),
             )
             return "wheel_call", record.id
+        if action == "close_leaps_call":
+            return "leaps_call_wheel", self._apply_leaps_call_close(details)
         if action == "close_position":
             return "position", self._apply_position_close(details)
         if action == "roll_position":
@@ -1746,6 +1838,11 @@ class IbkrImportService:
                 opened_on=date.fromisoformat(details["opened_on"]),
                 expiration=(date.fromisoformat(details["expiration"]) if details.get("expiration") else None),
                 strike=(Decimal(str(details["strike"])) if details.get("strike") is not None else None),
+                linked_position_id=(
+                    int(details["linked_position_id"])
+                    if details.get("linked_position_id") is not None
+                    else None
+                ),
                 status="open",
                 quote_source="ibkr_statement",
                 quote_as_of=date.fromisoformat(
@@ -1760,11 +1857,74 @@ class IbkrImportService:
             record.quantity = Decimal(str(details["quantity"]))
             record.entry_price = Decimal(str(details["cost_price"])) or record.entry_price
             record.current_price = Decimal(str(details["close_price"])) or record.current_price
+            if details.get("category"):
+                record.category = details["category"]
+            if details.get("linked_position_id") is not None:
+                record.linked_position_id = int(details["linked_position_id"])
         record.quote_source = "ibkr_statement"
         record.quote_as_of = date.fromisoformat(
             details.get("report_as_of") or date.today().isoformat()
         )
         record.last_error = None
+        self.session.commit()
+        return record.id
+
+    def _apply_leaps_call(self, action: str, details: dict[str, Any]) -> int:
+        if action == "create_leaps_call":
+            return self._apply_unmanaged(
+                "create_unmanaged",
+                {**details, "category": LEAPS_CALL_WHEEL_CATEGORY},
+            )
+        return self._apply_unmanaged(
+            "update_unmanaged",
+            {**details, "category": LEAPS_CALL_WHEEL_CATEGORY},
+        )
+
+    def _apply_leaps_call_close(self, details: dict[str, Any]) -> int:
+        record = self.session.get(
+            UnmanagedPositionRecord, int(details["holding_id"])
+        )
+        if record is None or record.status != "open":
+            raise ValueError("待平仓 LEAPS Sell Call 不存在，请重新预览")
+        quantity = Decimal(str(details["quantity"]))
+        if quantity != record.quantity:
+            raise ValueError("当前仅支持整笔 LEAPS Sell Call 平仓导入")
+        exit_price = Decimal(str(details["exit_price"]))
+        closed_on = date.fromisoformat(details["closed_on"])
+        realized = (
+            (record.entry_price - exit_price)
+            * quantity
+            * record.multiplier
+        ).quantize(Decimal("0.01"))
+        record.current_price = exit_price
+        record.exit_price = exit_price
+        record.closed_on = closed_on
+        record.realized_profit = realized
+        record.status = "closed"
+        event = LedgerEvent(
+            event_type="leaps_call_close",
+            bucket=Bucket.LEAPS.value,
+            amount=realized,
+            occurred_on=closed_on,
+            details={
+                "holding_id": record.id,
+                "linked_position_id": record.linked_position_id,
+                "symbol": record.symbol,
+                "quantity": float(quantity),
+                "price": float(exit_price),
+                "source": "IBKR",
+            },
+        )
+        self.session.add(event)
+        self.session.flush()
+        RealizedCashService(self.session).post(
+            f"leaps-call-wheel:{record.id}",
+            Bucket.LEAPS,
+            realized,
+            closed_on,
+            profit_source="leaps",
+            note=f"{record.symbol} LEAPS Sell Call 平仓",
+        )
         self.session.commit()
         return record.id
 
@@ -1893,6 +2053,58 @@ class IbkrImportService:
                 )
             )
         )
+
+    def _matching_leaps_calls(
+        self, contract: Contract
+    ) -> list[UnmanagedPositionRecord]:
+        return list(
+            self.session.scalars(
+                select(UnmanagedPositionRecord).where(
+                    UnmanagedPositionRecord.status == "open",
+                    UnmanagedPositionRecord.category == LEAPS_CALL_WHEEL_CATEGORY,
+                    UnmanagedPositionRecord.symbol == contract.symbol,
+                    UnmanagedPositionRecord.asset_type == "option",
+                    UnmanagedPositionRecord.direction == "short",
+                    UnmanagedPositionRecord.option_type == "call",
+                    UnmanagedPositionRecord.expiration == contract.expiration,
+                    UnmanagedPositionRecord.strike == contract.strike,
+                )
+            )
+        )
+
+    def _single_covering_leaps_position(
+        self, symbol: str, contracts: int
+    ) -> PositionRecord | None:
+        if symbol == "QLD":
+            required_quantity = Decimal(contracts * 100)
+            candidates = list(
+                self.session.scalars(
+                    select(PositionRecord).where(
+                        PositionRecord.status == "open",
+                        PositionRecord.bucket == Bucket.LEAPS.value,
+                        PositionRecord.symbol == "QLD",
+                        PositionRecord.asset_type == "equity",
+                        PositionRecord.direction == "long",
+                        PositionRecord.option_type.is_(None),
+                        PositionRecord.quantity >= required_quantity,
+                    )
+                )
+            )
+            return candidates[0] if len(candidates) == 1 else None
+        candidates = list(
+            self.session.scalars(
+                select(PositionRecord).where(
+                    PositionRecord.status == "open",
+                    PositionRecord.bucket == Bucket.LEAPS.value,
+                    PositionRecord.symbol == symbol,
+                    PositionRecord.asset_type == "option",
+                    PositionRecord.direction == "long",
+                    PositionRecord.option_type == "call",
+                    PositionRecord.quantity >= contracts,
+                )
+            )
+        )
+        return candidates[0] if len(candidates) == 1 else None
 
     def _matching_unmanaged(
         self, contract: Contract, direction: str

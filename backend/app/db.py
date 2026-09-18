@@ -3,16 +3,20 @@ from pathlib import Path
 
 from decimal import Decimal
 
-from sqlalchemy import Engine, create_engine, inspect, select
+from sqlalchemy import Engine, create_engine, func, inspect, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db_models import (
     Base,
+    BrokerImportRecord,
     BucketBalance,
     LedgerEvent,
     OtherHoldingRecord,
     PortfolioProfile,
     UnmanagedPositionRecord,
+    PositionRecord,
+    WheelPutLot,
+    WheelRound,
 )
 from app.domain.models import Bucket
 from app.domain.redistribution import recommend_distribution
@@ -80,6 +84,16 @@ def initialize_database(selected_engine: Engine = engine) -> None:
                 connection.exec_driver_sql(
                     f"ALTER TABLE positions ADD COLUMN {name} {sql_type}"
                 )
+    unmanaged_columns = {
+        column["name"]
+        for column in inspect(selected_engine).get_columns("unmanaged_positions")
+    }
+    if "linked_position_id" not in unmanaged_columns:
+        with selected_engine.begin() as connection:
+            connection.exec_driver_sql(
+                "ALTER TABLE unmanaged_positions "
+                "ADD COLUMN linked_position_id INTEGER REFERENCES positions(id)"
+            )
     wheel_put_columns = {
         column["name"] for column in inspect(selected_engine).get_columns("wheel_put_lots")
     }
@@ -97,6 +111,7 @@ def initialize_database(selected_engine: Engine = engine) -> None:
                 )
     _migrate_legacy_unallocated(selected_engine)
     _migrate_legacy_other_holdings(selected_engine)
+    _migrate_strategy_positions(selected_engine)
 
 
 def _migrate_legacy_unallocated(selected_engine: Engine) -> None:
@@ -177,6 +192,153 @@ def _migrate_legacy_other_holdings(selected_engine: Engine) -> None:
             )
         if records:
             session.commit()
+
+
+def _migrate_strategy_positions(selected_engine: Engine) -> None:
+    """Reclassify already imported strategy legs after the taxonomy changed."""
+    from app.domain.core import CORE_PUT_SYMBOLS
+    from app.domain.leaps import LEAPS_CALL_WHEEL_CATEGORY
+
+    with Session(selected_engine) as session:
+        changed = False
+        strategy_calls = list(
+            session.scalars(
+                select(UnmanagedPositionRecord).where(
+                    UnmanagedPositionRecord.asset_type == "option",
+                    UnmanagedPositionRecord.direction == "short",
+                    UnmanagedPositionRecord.option_type == "call",
+                    UnmanagedPositionRecord.category == "other",
+                )
+            )
+        )
+        for record in strategy_calls:
+            if record.symbol == "QLD":
+                # A QLD replacement position covers one call with 100 shares.
+                required_quantity = record.quantity * Decimal("100")
+                candidates = list(
+                    session.scalars(
+                        select(PositionRecord).where(
+                            PositionRecord.status == "open",
+                            PositionRecord.bucket == "leaps",
+                            PositionRecord.asset_type == "equity",
+                            PositionRecord.direction == "long",
+                            PositionRecord.option_type.is_(None),
+                            PositionRecord.symbol == "QLD",
+                            PositionRecord.quantity >= required_quantity,
+                        )
+                    )
+                )
+            else:
+                candidates = list(
+                    session.scalars(
+                        select(PositionRecord).where(
+                            PositionRecord.status == "open",
+                            PositionRecord.bucket == "leaps",
+                            PositionRecord.asset_type == "option",
+                            PositionRecord.direction == "long",
+                            PositionRecord.option_type == "call",
+                            PositionRecord.symbol == record.symbol,
+                            PositionRecord.quantity >= record.quantity,
+                        )
+                    )
+                )
+            if len(candidates) != 1:
+                continue
+            record.category = LEAPS_CALL_WHEEL_CATEGORY
+            record.linked_position_id = candidates[0].id
+            _update_import_entity(
+                session,
+                record.id,
+                entity_type="leaps_call_wheel",
+                entity_id=record.id,
+            )
+            changed = True
+
+        core_puts = list(
+            session.scalars(
+                select(UnmanagedPositionRecord).where(
+                    UnmanagedPositionRecord.status == "open",
+                    UnmanagedPositionRecord.asset_type == "option",
+                    UnmanagedPositionRecord.direction == "short",
+                    UnmanagedPositionRecord.option_type == "put",
+                    UnmanagedPositionRecord.symbol.in_(CORE_PUT_SYMBOLS),
+                    UnmanagedPositionRecord.category == "other",
+                )
+            )
+        )
+        for record in core_puts:
+            if record.expiration is None or record.strike is None:
+                continue
+            duplicate = session.scalar(
+                select(WheelPutLot.id).where(
+                    WheelPutLot.state == "open",
+                    WheelPutLot.capital_bucket == "core",
+                    WheelPutLot.symbol == record.symbol,
+                    WheelPutLot.expiration == record.expiration,
+                    WheelPutLot.strike == record.strike,
+                )
+            )
+            if duplicate is not None:
+                continue
+            round_number = int(
+                session.scalar(select(func.coalesce(func.max(WheelRound.number), 0))) or 0
+            ) + 1
+            trade_date = record.opened_on or date.today()
+            round_record = WheelRound(
+                number=round_number,
+                opened_on=trade_date,
+                status="active",
+            )
+            session.add(round_record)
+            session.flush()
+            put = WheelPutLot(
+                round_id=round_record.id,
+                symbol=record.symbol,
+                capital_bucket="core",
+                batch_number=1,
+                trade_date=trade_date,
+                expiration=record.expiration,
+                strike=record.strike,
+                premium=record.entry_price or Decimal("0.01"),
+                quantity=int(record.quantity),
+                open_quantity=int(record.quantity),
+                assigned_contracts=0,
+                entry_tqqq_price=Decimal("0"),
+                earnings_confirmed=True,
+                state="open",
+                realized_profit=Decimal("0"),
+            )
+            session.add(put)
+            session.flush()
+            _update_import_entity(
+                session,
+                record.id,
+                entity_type="wheel_put",
+                entity_id=put.id,
+            )
+            session.delete(record)
+            changed = True
+
+        if changed:
+            session.commit()
+
+
+def _update_import_entity(
+    session: Session,
+    unmanaged_id: int,
+    *,
+    entity_type: str,
+    entity_id: int,
+) -> None:
+    rows = session.scalars(
+        select(BrokerImportRecord).where(
+            BrokerImportRecord.entity_type == "unmanaged_position",
+            BrokerImportRecord.entity_id == unmanaged_id,
+        )
+    )
+    for row in rows:
+        row.entity_type = entity_type
+        row.entity_id = entity_id
 
 
 def get_session():

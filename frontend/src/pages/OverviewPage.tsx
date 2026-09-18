@@ -71,7 +71,7 @@ function CashControl({ portfolio }: { portfolio: PortfolioSummary }) {
   const cash = capital?.cash ?? { total: portfolio.balances?.cash ?? 0, cash_equivalent: 0, liquid: portfolio.balances?.cash ?? 0, occupied: 0, available: portfolio.balances?.cash ?? 0, margin_shortfall: 0 }
   const rows = [
     { label: '现金桶本金', value: cash.total, icon: WalletCards },
-    { label: 'BOXX 等价物', value: cash.cash_equivalent ?? 0, icon: Landmark },
+    { label: 'BOXX 现金等价物', value: cash.cash_equivalent ?? 0, icon: Landmark },
     { label: '账面现金', value: cash.liquid ?? cash.total, icon: Banknote },
     { label: '期权池占用', value: capital?.options?.cash_occupancy ?? 0, icon: CircleDollarSign },
     { label: '可用现金', value: cash.available, icon: Banknote },
@@ -90,7 +90,7 @@ function CashTransfer({ onAction, cash, totalCash }: { onAction: (path: string, 
     await onAction('/portfolio/transfers', { source: 'cash', target: data.get('target'), amount: Number(data.get('amount')), date: data.get('date'), note: data.get('note') }, 'POST')
     form.reset()
   }
-  return <section className="cash-transfer-band"><div><p className="eyebrow">CASH ALLOCATION</p><h2>现金资金分配</h2><p>现金总额 {formatMoney(totalCash)} · 当前可用 {formatMoney(cash)}</p></div><form aria-label="现金资金分配" onSubmit={submit}><label>日期<input name="date" type="date" defaultValue={new Date().toISOString().slice(0, 10)} required /></label><label>转入资金桶<select name="target" defaultValue="core"><option value="core">BRK.B 核心仓</option><option value="wheel">期权策略共享池</option></select></label><label>金额<input aria-label="金额" name="amount" type="number" min="0.01" max={cash} step="0.01" required /></label><label>备注<input name="note" /></label><button className="primary-button">确认资金分配</button></form></section>
+  return <section className="cash-transfer-band"><div><p className="eyebrow">CASH ALLOCATION</p><h2>现金资金分配</h2><p>现金桶余额 {formatMoney(totalCash)} · 当前可转出 {formatMoney(cash)}（含 BOXX 现金等价物）</p></div><form aria-label="现金资金分配" onSubmit={submit}><label>日期<input name="date" type="date" defaultValue={new Date().toISOString().slice(0, 10)} required /></label><label>转入资金桶<select name="target" defaultValue="core"><option value="core">BRK.B 核心仓</option><option value="wheel">期权策略共享池</option></select></label><label>金额<input aria-label="金额" name="amount" type="number" min="0.01" max={cash} step="0.01" required /></label><label>备注<input name="note" /></label><button className="primary-button">确认资金分配</button></form></section>
 }
 
 function Metric({ icon: Icon, label, value, tone = '' }: { icon: typeof WalletCards; label: string; value: string; tone?: string }) {

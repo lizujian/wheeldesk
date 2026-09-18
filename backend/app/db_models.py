@@ -271,6 +271,9 @@ class UnmanagedPositionRecord(Base):
     opened_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     expiration: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
     strike: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    linked_position_id: Mapped[int | None] = mapped_column(
+        ForeignKey("positions.id"), nullable=True, index=True
+    )
     status: Mapped[str] = mapped_column(String(12), default="open", index=True)
     closed_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     exit_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)

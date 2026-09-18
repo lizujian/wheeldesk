@@ -100,6 +100,25 @@
 .leaps-exit-monitor strong { font-size: 11px; }
 .leaps-exit-monitor.actionable span, .leaps-exit-monitor.actionable small { color: #935b55; }
 
+.leaps-call-wheel-register { border-top: 1px solid var(--line); padding-top: 14px; display: grid; gap: 9px; }
+.leaps-call-wheel-register > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.leaps-call-wheel-register > header > div { display: grid; gap: 2px; }
+.leaps-call-wheel-register p { margin: 0; color: var(--muted); font-size: 8px; font-weight: 900; letter-spacing: .08em; }
+.leaps-call-wheel-register h3 { margin: 0; font-size: 12px; }
+.leaps-call-wheel-register > header > span { color: var(--muted); font-size: 9px; }
+.leaps-call-wheel-card { min-width: 0; display: grid; grid-template-columns: minmax(170px, 1.4fr) repeat(5, minmax(90px, .75fr)); gap: 10px; align-items: center; padding: 11px 12px; border: 1px solid #d5ddd8; border-left: 4px solid var(--leaps-accent); background: #f3f8f5; }
+.leaps-call-wheel-card.loss { border-left-color: var(--red); background: #fff5f3; }
+.leaps-call-wheel-card > div { min-width: 0; display: grid; gap: 3px; }
+.leaps-call-wheel-card small { color: var(--muted); font-size: 8px; }
+.leaps-call-wheel-card strong { min-width: 0; font-size: 10px; overflow-wrap: anywhere; }
+.leaps-call-wheel-title { display: grid; grid-template-columns: auto 1fr; align-items: baseline; gap: 3px 7px; }
+.leaps-call-wheel-title b { color: var(--ink); font: 700 14px Georgia, serif; }
+.leaps-call-wheel-title span { grid-column: 1 / -1; color: var(--muted); font-size: 8px; }
+.leaps-call-wheel-link { grid-column: 1 / -1; color: #176044 !important; }
+.leaps-call-wheel-register details { border: 1px dashed #bdc5c1; background: #f7f8f7; padding: 8px 10px; }
+.leaps-call-wheel-register summary { cursor: pointer; color: var(--muted); font-size: 9px; font-weight: 800; }
+.leaps-call-wheel-register details .leaps-call-wheel-card { margin-top: 8px; }
+
 .leaps-capacity-band { border: 1px solid var(--line); background: var(--paper); }
 .leaps-capacity-band > header { min-height: 52px; padding: 10px 15px; background: var(--ink); color: white; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .leaps-capacity-band > header > div { display: grid; gap: 2px; }
@@ -185,6 +204,8 @@
   .leaps-signal-band { grid-template-columns: 1.25fr repeat(2, 1fr); }
   .leaps-signal-verdict { grid-row: span 2; }
   .leaps-lot-values { grid-template-columns: repeat(3, 1fr); }
+  .leaps-call-wheel-card { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .leaps-call-wheel-title, .leaps-call-wheel-link { grid-column: 1 / -1; }
   .leaps-roll-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .leaps-roll-metrics > div:nth-child(2) { border-right: 0; }
   .leaps-roll-metrics > div:nth-child(-n+2) { border-bottom: 1px solid #e6c9c6; }

@@ -17,15 +17,16 @@ import {
 } from 'lucide-react'
 
 import { formatMoney } from '../components/AllocationChart'
-import type { ClubEntryDecision, MarketSnapshot, PortfolioSummary, Position, TrancheDecision } from '../lib/types'
+import type { ClubEntryDecision, MarketSnapshot, OtherHolding, PortfolioSummary, Position, TrancheDecision } from '../lib/types'
 import './LeapsPage.css'
 
 const slotFractions = [.2, .2, .2, .2, .2]
 
-export function LeapsPage({ market, positions, portfolio }: {
+export function LeapsPage({ market, positions, portfolio, leapsCalls = [] }: {
   market: MarketSnapshot | null
   positions: Position[]
   portfolio: PortfolioSummary
+  leapsCalls?: OtherHolding[]
 }) {
   const [strategy, setStrategy] = useState<'qqq' | 'club'>('qqq')
   const leapsHistory = positions.filter((position) => position.bucket === 'leaps')
@@ -35,6 +36,8 @@ export function LeapsPage({ market, positions, portfolio }: {
     .map((position) => [position.id, position]))
   const qqqLeaps = leaps.filter((position) => !isClubPosition(position))
   const clubLeaps = leaps.filter(isClubPosition)
+  const qqqLeapsCalls = leapsCalls.filter((record) => record.symbol === 'QQQ' || record.symbol === 'QLD')
+  const clubLeapsCalls = leapsCalls.filter((record) => record.symbol !== 'QQQ')
   const target = portfolio.targets?.options?.amount ?? ((portfolio.targets?.wheel?.amount ?? 0) + (portfolio.targets?.leaps?.amount ?? 0))
   const targetFraction = portfolio.targets?.options?.fraction ?? ((portfolio.targets?.wheel?.fraction ?? 0) + (portfolio.targets?.leaps?.fraction ?? 0))
   const slotTarget = (portfolio.targets?.leaps?.amount ?? 0) * .2
@@ -106,6 +109,7 @@ export function LeapsPage({ market, positions, portfolio }: {
       <LeapsHoldingsRegister
         positions={qqqLeaps}
         rollSources={closedById}
+        callWheels={qqqLeapsCalls}
         marketDate={market?.as_of}
         title="QQQ / QLD 当前持仓"
         eyebrow="LIVE REGISTER"
@@ -119,7 +123,7 @@ export function LeapsPage({ market, positions, portfolio }: {
         slotTarget={slotTarget}
         fifoSlot={fifo?.required ? fifo.candidate?.slot : null}
       />
-    </> : <ClubConsole market={market} positions={clubLeaps} rollSources={closedById} sharedTarget={target} slotTarget={slotTarget} />}
+    </> : <ClubConsole market={market} positions={clubLeaps} rollSources={closedById} callWheels={clubLeapsCalls} sharedTarget={target} slotTarget={slotTarget} />}
   </div>
 }
 
@@ -145,10 +149,11 @@ function SignalMetric({ label, primary, secondary, pass = false }: { label: stri
   return <div className={`leaps-signal-metric ${pass ? 'pass' : ''}`}><span>{label}</span><strong>{primary}</strong><small>{pass ? <Check size={12} /> : <ArrowDownRight size={12} />}{secondary}</small></div>
 }
 
-function ClubConsole({ market, positions, rollSources, sharedTarget, slotTarget }: {
+function ClubConsole({ market, positions, rollSources, callWheels, sharedTarget, slotTarget }: {
   market: MarketSnapshot | null
   positions: Position[]
   rollSources: Map<number, Position>
+  callWheels: OtherHolding[]
   sharedTarget: number
   slotTarget: number
 }) {
@@ -167,6 +172,7 @@ function ClubConsole({ market, positions, rollSources, sharedTarget, slotTarget 
     <LeapsHoldingsRegister
       positions={positions}
       rollSources={rollSources}
+      callWheels={callWheels}
       marketDate={market?.as_of}
       title="万亿俱乐部当前持仓"
       eyebrow="CLUB LIVE REGISTER"
@@ -207,9 +213,10 @@ function ClubConsole({ market, positions, rollSources, sharedTarget, slotTarget 
   </section>
 }
 
-function LeapsHoldingsRegister({ positions, rollSources, marketDate, title, eyebrow, fifoPositionId, emptyMessage }: {
+function LeapsHoldingsRegister({ positions, rollSources, callWheels, marketDate, title, eyebrow, fifoPositionId, emptyMessage }: {
   positions: Position[]
   rollSources: Map<number, Position>
+  callWheels: OtherHolding[]
   marketDate?: string
   title: string
   eyebrow: string
@@ -225,7 +232,34 @@ function LeapsHoldingsRegister({ positions, rollSources, marketDate, title, eyeb
     {sorted.length
       ? <div className="leaps-lot-list">{sorted.map((position) => <LeapsPositionCard position={position} rolledFrom={position.rolled_from_position_id ? rollSources.get(position.rolled_from_position_id) : undefined} marketDate={marketDate} fifoCandidate={position.id === fifoPositionId} key={position.id} />)}</div>
       : <div className="leaps-register-empty"><CircleDashed size={22} /><strong>{emptyMessage}</strong><span>下一次成交由 IBKR 报表自动同步</span></div>}
+    <LeapsCallWheelRegister calls={callWheels} />
   </section>
+}
+
+function LeapsCallWheelRegister({ calls }: { calls: OtherHolding[] }) {
+  const active = calls.filter((call) => call.status === 'open')
+  const history = calls.filter((call) => call.status !== 'open')
+  if (!calls.length) return null
+  return <section className="leaps-call-wheel-register" aria-label="LEAPS Sell Call 轮动">
+    <header><div><p>CALL WHEEL</p><h3>LEAPS Sell Call 轮动</h3></div><span>{active.length} 笔活动{history.length ? ` · ${history.length} 笔历史` : ''}</span></header>
+    {active.map((call) => <LeapsCallWheelCard call={call} key={call.id} />)}
+    {history.length > 0 && <details><summary>查看已平仓 Sell Call（{history.length} 笔）</summary>{history.map((call) => <LeapsCallWheelCard call={call} key={call.id} />)}</details>}
+  </section>
+}
+
+function LeapsCallWheelCard({ call }: { call: OtherHolding }) {
+  const open = call.status === 'open'
+  const profit = open ? call.unrealized_profit : call.realized_profit
+  const value = call.current_value == null ? null : Math.abs(call.current_value)
+  return <article className={`leaps-call-wheel-card ${profit != null && profit < 0 ? 'loss' : ''}`} aria-label={`${call.symbol} LEAPS Sell Call ${call.id}`}>
+    <div className="leaps-call-wheel-title"><b>{call.symbol}</b><strong>${call.strike ?? '—'} Call</strong><span>{open ? '持仓中' : `已${call.status === 'closed' ? '平仓' : '结束'}`}</span></div>
+    <div><small>合约</small><strong>{call.quantity} 张</strong></div>
+    <div><small>收取权利金 / 股</small><strong>{formatMoney(call.entry_price ?? 0)}</strong></div>
+    <div><small>{open ? '当前买回价' : '退出价格'}</small><strong>{formatMoney((open ? call.current_price : call.exit_price) ?? 0)}</strong></div>
+    <div><small>{open ? '当前负债估值' : '已实现盈亏'}</small><strong>{open ? value == null ? '等待报价' : formatMoney(value) : formatMoney(profit ?? 0)}</strong></div>
+    <div><small>到期日</small><strong>{call.expiration ?? '—'}</strong></div>
+    {call.linked_position_id && <small className="leaps-call-wheel-link">关联 Long Call #{call.linked_position_id}</small>}
+  </article>
 }
 
 function LeapsPositionCard({ position, rolledFrom, marketDate, fifoCandidate }: { position: Position; rolledFrom?: Position; marketDate?: string; fifoCandidate: boolean }) {

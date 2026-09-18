@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db_models import PortfolioProfile, UnmanagedPositionRecord
+from app.domain.leaps import LEAPS_CALL_WHEEL_CATEGORY
 
 ZERO = Decimal("0")
 BOXX = "BOXX"
@@ -109,9 +110,16 @@ class OtherHoldingService:
         if not include_closed:
             statement = statement.where(UnmanagedPositionRecord.status == "open")
         records = list(self.session.scalars(statement))
+        strategy_records = [
+            record for record in records if record.category == LEAPS_CALL_WHEEL_CATEGORY
+        ]
+        records = [
+            record for record in records if record.category != LEAPS_CALL_WHEEL_CATEGORY
+        ]
         open_records = [record for record in records if record.status == "open"]
         return {
             "records": [self.payload(record) for record in records],
+            "leaps_call_wheels": [self.payload(record) for record in strategy_records],
             "total_value": sum(
                 (self._signed_value(record) for record in open_records), ZERO
             ).quantize(Decimal("0.01")),
@@ -185,6 +193,7 @@ class OtherHoldingService:
             "quote_as_of": record.quote_as_of,
             "quote_status": quote_status,
             "last_error": record.last_error,
+            "linked_position_id": record.linked_position_id,
         }
 
     @staticmethod

@@ -85,7 +85,7 @@ export default function App() {
         <Route path="/core" element={<CorePage portfolio={portfolio} market={market} positions={positions} overview={wheel} />} />
         <Route path="/wheel" element={<WheelPage market={market} overview={wheel} />} />
         <Route path="/wheel/history" element={<WheelHistoryPage overview={wheel} />} />
-        <Route path="/leaps" element={<LeapsPage market={market} positions={positionHistory} portfolio={portfolio} />} />
+        <Route path="/leaps" element={<LeapsPage market={market} positions={positionHistory} portfolio={portfolio} leapsCalls={otherHoldings.leaps_call_wheels ?? []} />} />
         <Route path="/rebalancing" element={<RebalancingPage snapshot={rebalancing} onEvaluate={async (date) => { setRebalancing(await api.evaluateRebalancing(date)) }} onAction={action} />} />
         <Route path="/profit-ledger" element={<ProfitLedgerPage ledger={profitLedger} onAction={action} onRedistribute={api.redistribute} />} />
         <Route path="/ledger" element={<LedgerPage events={events} />} />

@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 
-import type { MarketSnapshot, PortfolioSummary, Position } from '../lib/types'
+import type { MarketSnapshot, OtherHolding, PortfolioSummary, Position } from '../lib/types'
 import { LeapsPage } from './LeapsPage'
 
 const portfolio: PortfolioSummary = {
@@ -73,6 +73,42 @@ function position(overrides: Partial<Position> = {}): Position {
 }
 
 describe('LEAPS five-slot console', () => {
+  it('shows a QLD replacement Sell Call in the QQQ / QLD tab', () => {
+    const qldCall: OtherHolding = {
+      id: 19, category: 'leaps_call_wheel', symbol: 'QLD', asset_type: 'option', direction: 'short', option_type: 'call',
+      quantity: 1, multiplier: 100, entry_price: 2.12, current_price: 2.64, current_value: -264, absolute_value: 264,
+      unrealized_profit: -52, opened_on: '2026-09-04', expiration: '2026-09-18', strike: 90, status: 'open', closed_on: null,
+      exit_price: null, realized_profit: null, quote_source: 'ibkr_statement', quote_as_of: '2026-09-04', quote_status: 'updated', last_error: null,
+      linked_position_id: 2,
+    }
+    render(<MemoryRouter><LeapsPage market={market} positions={[]} portfolio={portfolio} leapsCalls={[qldCall]} /></MemoryRouter>)
+
+    const register = screen.getByRole('region', { name: 'QQQ / QLD 当前持仓' })
+    expect(within(register).getByText('LEAPS Sell Call 轮动')).toBeInTheDocument()
+    expect(within(register).getByText('QLD')).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: '万亿俱乐部 LEAPS' })).not.toBeInTheDocument()
+  })
+
+  it('shows a covered LEAPS Sell Call under the matching club tab', async () => {
+    const user = userEvent.setup()
+    const leapsCall: OtherHolding = {
+      id: 18, category: 'leaps_call_wheel', symbol: 'GOOG', asset_type: 'option', direction: 'short', option_type: 'call',
+      quantity: 1, multiplier: 100, entry_price: 3.5, current_price: 3.975, current_value: -397.5, absolute_value: 397.5,
+      unrealized_profit: -47.5, opened_on: '2026-09-14', expiration: '2026-10-02', strike: 360, status: 'open', closed_on: null,
+      exit_price: null, realized_profit: null, quote_source: 'ibkr_statement', quote_as_of: '2026-09-14', quote_status: 'updated', last_error: null,
+      linked_position_id: 7,
+    }
+    render(<MemoryRouter><LeapsPage market={market} positions={[]} portfolio={portfolio} leapsCalls={[leapsCall]} /></MemoryRouter>)
+
+    expect(screen.queryByText('LEAPS Sell Call 轮动')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /万亿俱乐部 Long Call/ }))
+
+    const register = screen.getByRole('region', { name: '万亿俱乐部当前持仓' })
+    expect(within(register).getByText('LEAPS Sell Call 轮动')).toBeInTheDocument()
+    expect(within(register).getByText('GOOG')).toBeInTheDocument()
+    expect(within(register).getByText('关联 Long Call #7')).toBeInTheDocument()
+  })
+
   it('switches between QQQ slots and the trillion-club console without stacking both strategies', async () => {
     const user = userEvent.setup()
     render(<MemoryRouter><LeapsPage market={market} positions={[]} portfolio={portfolio} /></MemoryRouter>)

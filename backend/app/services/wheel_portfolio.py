@@ -54,7 +54,7 @@ class WheelPortfolioService:
         if capital_bucket not in {Bucket.CORE.value, Bucket.WHEEL.value}:
             raise ValueError("Sell Put 资金归属只允许核心仓或车轮策略")
         if is_core_put and symbol not in CORE_PUT_SYMBOLS:
-            raise ValueError("核心仓 Sell Put 只允许 BRK.B、VOO 或 SPY")
+            raise ValueError("核心仓 Sell Put 只允许 BRK.B、VOO、SCHD 或 SPY")
         if not is_core_put and symbol != "TQQQ" and not is_wheel_club_symbol(symbol):
             raise ValueError("车轮标的只允许 TQQQ 或万亿俱乐部车轮候选股票")
         if not is_core_put and symbol != "TQQQ" and not earnings_confirmed and not broker_reconciled:

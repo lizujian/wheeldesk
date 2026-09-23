@@ -10,14 +10,15 @@ def allocation_targets(age: int) -> dict[Bucket, Decimal]:
     if not 0 <= age <= 100:
         raise ValueError("年龄必须在 0 到 100 之间")
 
-    core = Decimal(min(age + 20, 80)) / Decimal("100")
+    # Keep the account-level risk budget stable. Wheel and LEAPS remain
+    # separate operational buckets, but their target is one shared 25% pool.
+    core = Decimal("0.70")
     cash = Decimal("0.05")
-    remaining = max(Decimal("1") - core - cash, ZERO)
-    leaps = min(Decimal("0.25"), remaining)
+    leaps = Decimal("0.25")
     return {
         Bucket.CORE: core,
         Bucket.CASH: cash,
-        Bucket.WHEEL: remaining - leaps,
+        Bucket.WHEEL: ZERO,
         Bucket.LEAPS: leaps,
     }
 

@@ -5,7 +5,7 @@ from decimal import Decimal
 from app.domain.indicators import DailyBar
 from app.market.base import MarketCapitalization, MarketDataError, MarketSeries, SessionQuote
 
-BASE_PRICES = {"QQQ": 520.0, "TQQQ": 85.0, "BRK.B": 490.0, "VIX": 18.0}
+BASE_PRICES = {"QQQ": 520.0, "TQQQ": 85.0, "BRK.B": 490.0, "VOO": 600.0, "SCHD": 33.0, "VIX": 18.0}
 
 
 class SampleMarketDataProvider:

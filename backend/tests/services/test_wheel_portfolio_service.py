@@ -135,8 +135,8 @@ def test_trade_can_use_capacity_previously_reserved_for_leaps(
 
     assert put.id is not None
     assert overview["budget"]["exposure"] == Decimal("110000.00")
-    assert overview["budget"]["over_budget"] == Decimal("0.00")
-    assert overview["budget"]["available"] == Decimal("30625.00")
+    assert overview["budget"]["over_budget"] == Decimal("31875.00")
+    assert overview["budget"]["available"] == Decimal("0.00")
 
 
 def test_overview_separates_assigned_capital_commitment_and_cash_margin(
@@ -266,7 +266,7 @@ def test_put_close_sends_realized_profit_to_cash_without_growing_wheel_budget(
     overview = service.overview()
 
     assert closed.realized_profit == Decimal("1200.00")
-    assert overview["budget"]["budget"] == Decimal("141165.00")
+    assert overview["budget"]["budget"] == Decimal("78425.00")
     assert overview["budget"]["funded"] == Decimal("100000.00")
     assert overview["budget"]["exposure"] == Decimal("0.00")
     assert service.session.get(BucketBalance, "cash").amount == Decimal("11200.00")

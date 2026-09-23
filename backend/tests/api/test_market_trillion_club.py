@@ -25,7 +25,7 @@ class ClubProvider:
     aapl_price = Decimal("94")
 
     def daily_bars(self, symbol: str, limit: int = 300) -> MarketSeries:
-        if symbol not in {"QQQ", "TQQQ", "BRK.B", "VOO", "VIX", "AAPL"}:
+        if symbol not in {"QQQ", "TQQQ", "BRK.B", "VOO", "SCHD", "VIX", "AAPL"}:
             raise MarketDataError(f"{symbol} unavailable")
         if symbol == "AAPL":
             closes = [Decimal("80")] * 269
@@ -116,7 +116,7 @@ def test_refresh_returns_a_public_club_signal_and_uses_a_shared_leaps_budget() -
         assert apple["technical_eligible"] is True
         assert apple["eligible"] is True
         assert apple["suggested_slot"] == 1
-        assert apple["suggested_amount"] == 5000.0
+        assert apple["suggested_amount"] == 1500.0
         assert apple["market_cap"] == 4_200_000_000_000.0
         assert "MU" in payload["leaps_club"]["exclusions"]
         assert all(row["symbol"] != "GOOGL" for row in payload["leaps_club"]["decisions"])

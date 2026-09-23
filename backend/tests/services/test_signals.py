@@ -54,6 +54,37 @@ def test_same_signal_on_same_market_date_is_deduplicated(service: SignalService)
     assert count == 1
 
 
+def test_wheel_signals_are_retired_without_removing_history(service: SignalService) -> None:
+    sell_put = service.emit(
+        "sell_put_opportunity",
+        "TQQQ 开仓 Sell Put",
+        "旧车轮机会",
+        "opportunity",
+        date(2026, 9, 23),
+    )
+    club_wheel = service.emit(
+        "trillion_club_wheel_avgo",
+        "AVGO 万亿俱乐部 Sell Put 机会",
+        "旧车轮机会",
+        "opportunity",
+        date(2026, 9, 23),
+    )
+    core = service.emit(
+        "core_buy_brk_b",
+        "BRK.B 核心仓买入建议",
+        "保留核心仓信号",
+        "opportunity",
+        date(2026, 9, 23),
+    )
+
+    service.retire_wheel_signals()
+
+    assert service.list_active() == [core]
+    assert sell_put.acknowledged is True
+    assert club_wheel.acknowledged is True
+    assert len(service.list_recent(include_acknowledged=True)) == 3
+
+
 def test_same_day_signal_refreshes_changed_content_and_becomes_active(
     service: SignalService,
 ) -> None:
@@ -182,14 +213,14 @@ def test_rotation_reminders_record_weights_and_retire_after_partial_execution(se
     decision = CoreRotationDecision(
         code="opportunity", actionable=True, ratio=Decimal(".84"), band="sell_0.83",
         current_brk_weight=Decimal("1"), target_brk_weight=Decimal(".55"),
-        next_brk_weight=Decimal(".8"), amount=Decimal("20000"),
-        sell_symbol="BRK.B", buy_symbol="VOO", weight_change=Decimal(".2"),
+        next_brk_weight=Decimal(".9"), amount=Decimal("10000"),
+        sell_symbol="BRK.B", buy_symbol="VOO", weight_change=Decimal(".1"),
     )
     first = service.sync_core_rotation(decision, date(2026, 9, 4))
     assert "0.8400" in first.message
     assert "55.0%" in first.message
-    assert "20.0%" in first.message
+    assert "10.0%" in first.message
     assert service.sync_core_rotation(decision, date(2026, 9, 7)) is None
-    service.sync_core_rotation(replace(decision, amount=Decimal("10000")), date(2026, 9, 7))
+    service.sync_core_rotation(replace(decision, amount=Decimal("9000")), date(2026, 9, 7))
     assert first.acknowledged
     assert service.list_active() == []

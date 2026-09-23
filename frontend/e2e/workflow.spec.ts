@@ -20,9 +20,9 @@ async function initialize(page: Page) {
   await expect(page.locator('.page-loading')).toBeHidden()
   await page.getByLabel('年龄').fill('30')
   await page.getByLabel('初始总金额').fill('100000')
-  await expect(page.getByText('BRK.B 核心仓 · 50%')).toBeVisible()
+  await expect(page.getByText('核心仓 · 70%')).toBeVisible()
   await expect(page.getByText('现金储备 · 5%')).toBeVisible()
-  await expect(page.getByText('期权策略共享池 · 45%')).toBeVisible()
+  await expect(page.getByText('期权策略共享池 · 25%')).toBeVisible()
   await page.getByRole('button', { name: '确认并建立账本' }).click()
   await expect(page.getByRole('heading', { name: '资产总览' })).toBeVisible()
 }

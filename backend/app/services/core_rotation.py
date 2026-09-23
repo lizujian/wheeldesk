@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db_models import CoreTradeRecord, LedgerEvent
+from app.domain.core import CORE_ROTATION_SYMBOLS
 from app.domain.core_rotation import RULES, RotationUsage
 
 ZERO = Decimal("0")
@@ -15,7 +16,7 @@ class CoreRotationService:
         self.session = session
 
     def usage(self, prices: dict[str, dict[date, Decimal]]) -> tuple[RotationUsage, list[dict]]:
-        days = sorted(set(prices["BRK.B"]) & set(prices["VOO"]))
+        days = sorted(set.intersection(*(set(prices[symbol]) for symbol in CORE_ROTATION_SYMBOLS)))
         if len(days) < RULES.window_sessions:
             return RotationUsage(complete=False), []
         window = days[-RULES.window_sessions:]
@@ -28,11 +29,17 @@ class CoreRotationService:
             if record.quantity >= ZERO or not window[0] <= traded_on <= window[-1]:
                 continue
             pre = record.pre_quantities
-            price_brk = record.price if record.symbol == "BRK.B" else prices["BRK.B"].get(traded_on)
-            price_voo = record.price if record.symbol == "VOO" else prices["VOO"].get(traded_on)
+            prices_on_trade = {
+                symbol: record.price if record.symbol == symbol else prices[symbol].get(traded_on)
+                for symbol in CORE_ROTATION_SYMBOLS
+            }
             fraction = None
-            if pre and price_brk and price_voo:
-                total = Decimal(pre["BRK.B"]) * price_brk + Decimal(pre["VOO"]) * price_voo
+            if pre and all(price is not None and price > ZERO for price in prices_on_trade.values()):
+                total = sum(
+                    (Decimal(str(pre.get(symbol, "0"))) * prices_on_trade[symbol]
+                     for symbol in CORE_ROTATION_SYMBOLS),
+                    ZERO,
+                )
                 if total > ZERO:
                     fraction = abs(record.quantity) * record.price / total
             if fraction is None:

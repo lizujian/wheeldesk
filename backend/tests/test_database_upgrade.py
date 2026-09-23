@@ -489,10 +489,10 @@ def test_initialize_database_distributes_legacy_unallocated_once_and_preserves_t
 
     assert balances == {
         "cash": 15000,
-        "core": 168000,
-            "leaps": 0,
+        "core": 210000,
+            "leaps": 75000,
         "unallocated": 0,
-            "wheel": 117000,
+            "wheel": 0,
     }
     assert position_count == 1
     assert put_count == 2

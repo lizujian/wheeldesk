@@ -8,7 +8,7 @@ import './ProfitLedgerPage.css'
 type ProfitAction = (path: string, payload: unknown) => Promise<void>
 type RedistributionAction = (amount: number) => Promise<DistributionRecommendation | void>
 
-const bucketLabels: Record<string, string> = { core: 'BRK.B 核心仓', cash: '现金储备', wheel: '期权策略共享池', leaps: '期权策略共享池' }
+const bucketLabels: Record<string, string> = { core: '核心仓', cash: '现金储备', wheel: '期权策略共享池', leaps: '期权策略共享池' }
 const sourceLabels: Record<string, string> = { wheel: 'TQQQ 车轮', leaps: 'QQQ LEAPS', other: '其他已实现', allocation: '已确认分配' }
 
 export function ProfitLedgerPage({ ledger, onAction, onRedistribute }: {

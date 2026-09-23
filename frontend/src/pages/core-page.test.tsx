@@ -142,7 +142,7 @@ describe('core equity page', () => {
     }
     render(<CorePage portfolio={portfolio} market={legacyMarket} positions={positions} />)
 
-    expect(screen.getByText('刷新行情后计算两只标的的相对偏离')).toBeInTheDocument()
+    expect(screen.getByText('刷新行情后计算核心资产状态')).toBeInTheDocument()
     expect(screen.getByRole('region', { name: '核心仓买入建议' })).toBeInTheDocument()
   })
 
@@ -161,15 +161,15 @@ describe('core equity page', () => {
       core: {
         ...market.core!, mode: 'full', total_value: 50000, target_gap: 0,
         selected_symbol: null, recommendation: null, rotation_confirmation_days: 5,
-        rotation: { code: 'opportunity', actionable: true, sell_symbol: 'BRK.B', buy_symbol: 'VOO', amount: 3000, sell_shares: 6.1224, buy_shares: 5, ratio: .84, confirmation_days: 3, current_brk_weight: .8, projected_brk_weight: .9, target_brk_weight: .55, next_brk_weight: .74, used_weight: .14, remaining_weight: .06 },
+        rotation: { code: 'opportunity', actionable: true, sell_symbol: 'BRK.B', buy_symbol: 'VOO', amount: 3000, sell_shares: 6.1224, buy_shares: 5, ratio: .84, confirmation_days: 5, current_brk_weight: .8, projected_brk_weight: .9, target_brk_weight: .55, next_brk_weight: .74, used_weight: .04, remaining_weight: .06 },
       },
     }
     render(<CorePage portfolio={portfolio} market={fullMarket} positions={positions} />)
-    const rotation = screen.getByRole('region', { name: '核心仓满仓轮换建议' })
-    expect(within(rotation).getByText('可评估分批轮动')).toBeInTheDocument()
+    const rotation = screen.getByRole('region', { name: '核心仓低频轮动观察' })
+    expect(within(rotation).getByText('低频观察：可评估分批轮动')).toBeInTheDocument()
     expect(within(rotation).getByText('BRK.B → VOO')).toBeInTheDocument()
     expect(within(rotation).getByText('$3,000.00 · —')).toBeInTheDocument()
-    expect(within(rotation).getByText('0.8400 · 3 / 3 日')).toBeInTheDocument()
+    expect(within(rotation).getByText('0.8400 · 5 / 5 日')).toBeInTheDocument()
     expect(within(rotation).getByText('80.0% / 90.0%')).toBeInTheDocument()
     expect(within(rotation).getByText('55.0% / 74.0%')).toBeInTheDocument()
   })

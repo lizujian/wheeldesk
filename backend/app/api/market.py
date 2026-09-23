@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 
 from app.db import get_session
 from app.domain.core import (
+    CORE_RATIO_SYMBOLS,
+    CORE_ROTATION_SYMBOLS,
     CORE_SYMBOLS,
     CoreAssetInputs,
     consecutive_extreme,
@@ -56,6 +58,7 @@ from app.services.core_rotation import CoreRotationService
 from app.services.wheel_cycles import WheelCycleService
 from app.services.wheel_portfolio import WheelPortfolioService
 from app.services.wheel_quotes import WheelQuoteService
+from app.services.pmcc import pmcc_snapshot
 from app.db_models import (
     CoreTradeRecord,
     LedgerEvent,
@@ -87,7 +90,7 @@ def refresh(
     try:
         series = {
             symbol: provider.daily_bars(symbol, 300)
-            for symbol in ("QQQ", "TQQQ", "BRK.B", "VOO", "VIX")
+            for symbol in ("QQQ", "TQQQ", *CORE_SYMBOLS, "VIX")
         }
     except MarketDataError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
@@ -143,7 +146,14 @@ def refresh(
     equity_quotes = _refresh_equities(session, provider, series)
     _refresh_unmanaged_options(session, option_provider, qqq_as_of)
     portfolio = PortfolioStore(session).summary()
-    target = portfolio.get("targets", {}).get("leaps", {}).get("amount", ZERO)
+    total_equity = Decimal(str(portfolio.get("total_equity", ZERO)))
+    pmcc_total_target = total_equity * Decimal("0.25")
+    pmcc_qqq_target = total_equity * Decimal("0.10")
+    pmcc_individual_target = total_equity * Decimal("0.15")
+    pmcc_individual_cap = total_equity * Decimal("0.03")
+    pmcc_qqq_slot_target = total_equity * Decimal("0.02")
+    pmcc_individual_slot_target = total_equity * Decimal("0.015")
+    target = pmcc_qqq_target
     option_target = portfolio.get("targets", {}).get("options", {}).get("amount", ZERO)
     option_capital = portfolio.get("capital", {}).get("options", {})
     option_committed = option_capital.get("committed", ZERO)
@@ -162,6 +172,14 @@ def refresh(
     used_tranches = {
         position.tranche for position in qqq_positions if position.tranche is not None
     }
+    qqq_committed = sum(
+        (
+            position.entry_price * position.quantity * position.multiplier
+            for position in leaps_positions
+            if position.symbol in {"QQQ", "QLD"}
+        ),
+        ZERO,
+    )
     invested = sum(
         (
             position.current_price * position.quantity * position.multiplier
@@ -181,7 +199,7 @@ def refresh(
     leaps = evaluate_leaps_tranches(
         market_state,
         used_tranches,
-        invested,
+        qqq_committed,
         target,
         as_of=market_date,
         last_entry_date=last_leaps_entry,
@@ -209,6 +227,7 @@ def refresh(
         "TQQQ": tqqq_spot,
         "BRK.B": series["BRK.B"].bars[-1].close,
         "VOO": series["VOO"].bars[-1].close,
+        "SCHD": series["SCHD"].bars[-1].close,
     }
     wheel_spots.update(
         {
@@ -241,15 +260,36 @@ def refresh(
         for position in club_positions
         if position.tranche is not None
     ]
+    individual_committed = sum(
+        (
+            position.entry_price * position.quantity * position.multiplier
+            for position in club_positions
+        ),
+        ZERO,
+    )
     club_decisions = evaluate_club_entries(
         club_market_states,
         club_position_states,
         option_committed,
-        option_target,
+        pmcc_total_target,
         qqq_above_ma200=market_state.close > market_state.ma200,
         as_of=market_date,
         confirmed_entry_dates=club_entry_dates,
-        slot_target=target * Decimal("0.20"),
+        slot_target=pmcc_individual_slot_target,
+        symbol_commitments={
+            symbol: sum(
+                (
+                    position.entry_price * position.quantity * position.multiplier
+                    for position in club_positions
+                    if position.symbol == symbol
+                ),
+                ZERO,
+            )
+            for symbol in TRILLION_CLUB_CANDIDATES
+        },
+        symbol_cap=pmcc_individual_cap,
+        individual_current=individual_committed,
+        individual_target=pmcc_individual_target,
     )
     club_wheel_puts = list(
         session.scalars(
@@ -294,6 +334,68 @@ def refresh(
         )
     )
     wheel_overview = wheel_service.overview()
+    underlying_prices = {
+        "QQQ": session_quote.price if session_quote else qqq_closes[-1],
+        **{
+            state.symbol: state.current_price or state.close
+            for state in club_market_states
+        },
+        **{
+            position.symbol: position.current_price
+            for position in leaps_positions
+            if position.symbol == "QLD"
+        },
+    }
+    pmcc = pmcc_snapshot(
+        session,
+        as_of=market_date,
+        underlying_prices=underlying_prices,
+    )
+    pmcc_states = pmcc.get("states", [])
+    qqq_available_contracts = sum(
+        (
+            max(
+                Decimal(str(state["covered_contracts"]))
+                - Decimal(str(state["short_quantity"])),
+                ZERO,
+            )
+            for state in pmcc_states
+            if state["symbol"] in {"QQQ", "QLD"}
+            and state["long_position_id"] is not None
+        ),
+        ZERO,
+    )
+    individual_available_symbols = [
+        state["symbol"]
+        for state in pmcc_states
+        if state["symbol"] not in {"QQQ", "QLD"}
+        and state["long_position_id"] is not None
+        and Decimal(str(state["covered_contracts"]))
+        > Decimal(str(state["short_quantity"]))
+    ]
+    individual_available_set = set(individual_available_symbols)
+    pmcc["entry"] = {
+        "qqq": {
+            "eligible": bool(base_entry_ready and qqq_available_contracts > ZERO),
+            "checks": leaps[0].checks if leaps else {},
+            "available_contracts": qqq_available_contracts,
+            "message": (
+                "复用 QQQ LEAPS 条件，已有 Long LEAPS 可覆盖 Short Call"
+                if qqq_available_contracts > ZERO
+                else "需先持有有效的 QQQ/QLD Long LEAPS"
+            ),
+        },
+        "individual": {
+            "eligible_symbols": [
+                decision.symbol
+                for decision in club_decisions
+                if decision.technical_eligible
+                and decision.symbol in individual_available_set
+            ],
+            "checks_reused": True,
+            "message": "复用万亿俱乐部 LEAPS 条件，且必须已有可覆盖的 Long LEAPS",
+        },
+    }
     club_wheel_decisions = evaluate_club_wheel_entries(
         club_market_states,
         club_wheel_positions,
@@ -357,9 +459,11 @@ def refresh(
             bar for bar in series[symbol].bars if bar.date < datetime.now(ZoneInfo("America/New_York")).date()
         ]
         completed_core[symbol] = {bar.date: bar.close for bar in bars}
-    rotation_dates = sorted(set(completed_core["BRK.B"]) & set(completed_core["VOO"]))
+    rotation_dates = sorted(
+        set.intersection(*(set(completed_core[symbol]) for symbol in CORE_SYMBOLS))
+    )
     rotation_ratios = [(day, completed_core["BRK.B"][day] / completed_core["VOO"][day])
-                       for day in rotation_dates if min(completed_core[symbol][day] for symbol in CORE_SYMBOLS) > ZERO]
+                       for day in rotation_dates if min(completed_core[symbol][day] for symbol in CORE_RATIO_SYMBOLS) > ZERO]
     rotation_valid = bool(rotation_dates) and all(
         series[symbol].source != "sample"
         and not is_stale(rotation_dates[-1], date.today())
@@ -429,6 +533,7 @@ def refresh(
         rotation_usage=rotation_usage,
         pending_brk_shares=sum((Decimal(str(put["open_quantity"])) * 100 for put in wheel_overview["core_puts"] if put["symbol"] == "BRK.B"), ZERO),
         pending_voo_shares=sum((Decimal(str(put["open_quantity"])) * 100 for put in wheel_overview["core_puts"] if put["symbol"] == "VOO"), ZERO),
+        pending_schd_shares=sum((Decimal(str(put["open_quantity"])) * 100 for put in wheel_overview["core_puts"] if put["symbol"] == "SCHD"), ZERO),
         rotation_data_valid=rotation_valid,
         rotation_prices={symbol: completed_core[symbol][rotation_dates[-1]] for symbol in CORE_SYMBOLS} if rotation_dates else {},
     )
@@ -444,15 +549,7 @@ def refresh(
         )
     stale = is_stale(qqq_as_of, date.today())
     signal_service = SignalService(session)
-    if sell_put.eligible:
-        signal_service.emit(
-            "sell_put_opportunity",
-            "TQQQ 开仓 Sell Put",
-            f"QQQ 三项条件满足，TQQQ 参考行权价 {sell_put.reference_strike}",
-            "opportunity",
-            market_date,
-            stale=stale,
-        )
+    signal_service.retire_wheel_signals()
     if risk.severity == "critical":
         signal_service.emit("ma200_break", "跌破牛熊分界线", risk.message, "critical", market_date, stale=stale)
     if series["VIX"].bars[-1].close >= Decimal("30"):
@@ -493,36 +590,6 @@ def refresh(
             market_date,
             stale=stale,
         )
-    club_wheel_opportunities = [
-        decision for decision in club_wheel_decisions if decision.technical_eligible
-    ]
-    if club_wheel_opportunities:
-        strongest = min(
-            club_wheel_opportunities,
-            key=lambda decision: (decision.change_fraction or ZERO, decision.symbol),
-        )
-        signal_service.emit(
-            f"trillion_club_wheel_{strongest.symbol.lower().replace('.', '_').replace('-', '_')}",
-            f"{strongest.symbol} 万亿俱乐部 Sell Put 机会",
-            "个股趋势、RSI、单日跌幅与支撑位条件同时满足；需确认财报和实际期权成交。",
-            "opportunity",
-            market_date,
-            stale=stale,
-        )
-    club_wheel_risks = [
-        decision for decision in club_wheel_decisions if decision.high_risk_put_ids
-    ]
-    if club_wheel_risks:
-        risky = club_wheel_risks[0]
-        signal_service.emit(
-            f"trillion_club_wheel_risk_{risky.symbol.lower().replace('.', '_').replace('-', '_')}",
-            f"{risky.symbol} 个股车轮趋势破位",
-            "个股连续两个完成交易日低于 SMA200，且现有车轮仓位面临行权或持股风险。",
-            "critical",
-            market_date,
-            stale=stale,
-        )
-
     sources = {value.source for value in series.values()}
     if session_quote is not None:
         sources.add(session_quote.source)
@@ -542,6 +609,7 @@ def refresh(
             "tqqq": {"price": tqqq_spot},
             "brk_b": {"price": series["BRK.B"].bars[-1].close},
             "voo": {"price": series["VOO"].bars[-1].close},
+            "schd": {"price": series["SCHD"].bars[-1].close},
             "vix": {"price": series["VIX"].bars[-1].close},
         },
         "wheel": {
@@ -564,11 +632,12 @@ def refresh(
         "leaps_fifo": fifo,
         "leaps_technical_ready": base_entry_ready,
         "leaps_shared_budget": {
-            "target": option_target,
+            "target": pmcc_total_target,
             "current": option_committed,
-            "available": max(option_target - option_committed, ZERO),
-            "over": max(option_committed - option_target, ZERO),
+            "available": max(pmcc_total_target - option_committed, ZERO),
+            "over": max(option_committed - pmcc_total_target, ZERO),
         },
+        "pmcc": pmcc,
         "leaps_club": {
             "decisions": club_decisions,
             "unavailable": club_unavailable,

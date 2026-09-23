@@ -64,7 +64,7 @@ def test_fifo_rebalance_sale_can_span_lots_and_moves_actual_proceeds_to_cash() -
         assert lots[0].quantity == 0
         assert lots[1].status == "open"
         assert lots[1].quantity == Decimal("5")
-        assert session.get(BucketBalance, "core").amount == Decimal("48000")
+        assert session.get(BucketBalance, "core").amount == Decimal("68000")
         assert session.get(BucketBalance, "cash").amount == Decimal("9500")
         assert PortfolioStore(session).profile().last_rebalanced_on == date(2026, 7, 31)
         event = session.scalar(

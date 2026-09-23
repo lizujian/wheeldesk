@@ -5,7 +5,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db_models import PortfolioProfile, UnmanagedPositionRecord
-from app.domain.leaps import LEAPS_CALL_WHEEL_CATEGORY
+from app.domain.models import Bucket
+from app.domain.pmcc import PMCC_CATEGORIES
+from app.services.realized_cash import RealizedCashService
+from app.services.pmcc import pmcc_snapshot
 
 ZERO = Decimal("0")
 BOXX = "BOXX"
@@ -92,6 +95,15 @@ class OtherHoldingService:
                 * record.multiplier
                 * signed
             ).quantize(Decimal("0.01"))
+            if record.category in PMCC_CATEGORIES:
+                RealizedCashService(self.session).post(
+                    f"pmcc-short-call:{record.id}",
+                    Bucket.LEAPS,
+                    record.realized_profit,
+                    closed_on,
+                    profit_source="leaps",
+                    note=f"{record.symbol} PMCC Short Call 平仓",
+                )
         self.session.commit()
         return self.payload(record)
 
@@ -110,16 +122,24 @@ class OtherHoldingService:
         if not include_closed:
             statement = statement.where(UnmanagedPositionRecord.status == "open")
         records = list(self.session.scalars(statement))
-        strategy_records = [
-            record for record in records if record.category == LEAPS_CALL_WHEEL_CATEGORY
-        ]
+        strategy_records = [record for record in records if record.category in PMCC_CATEGORIES]
         records = [
-            record for record in records if record.category != LEAPS_CALL_WHEEL_CATEGORY
+            record for record in records if record.category not in PMCC_CATEGORIES
         ]
         open_records = [record for record in records if record.status == "open"]
+        pmcc = pmcc_snapshot(self.session, as_of=date.today())
+        state_by_call_id = {
+            call_id: state
+            for state in pmcc.get("states", [])
+            for call_id in state["short_call_ids"]
+        }
         return {
             "records": [self.payload(record) for record in records],
-            "leaps_call_wheels": [self.payload(record) for record in strategy_records],
+            "leaps_call_wheels": [
+                self.payload(record, state_by_call_id.get(record.id))
+                for record in strategy_records
+            ],
+            "pmcc": pmcc,
             "total_value": sum(
                 (self._signed_value(record) for record in open_records), ZERO
             ).quantize(Decimal("0.01")),
@@ -143,7 +163,7 @@ class OtherHoldingService:
         }
 
     @classmethod
-    def payload(cls, record: UnmanagedPositionRecord) -> dict:
+    def payload(cls, record: UnmanagedPositionRecord, pmcc_state: dict | None = None) -> dict:
         absolute_value = (
             (record.current_price * record.quantity * record.multiplier).quantize(Decimal("0.01"))
             if record.current_price is not None
@@ -194,6 +214,7 @@ class OtherHoldingService:
             "quote_status": quote_status,
             "last_error": record.last_error,
             "linked_position_id": record.linked_position_id,
+            "pmcc_state": pmcc_state,
         }
 
     @staticmethod

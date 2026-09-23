@@ -11,7 +11,7 @@ const COLORS: Record<string, string> = {
 }
 
 const LABELS: Record<string, string> = {
-  core: 'BRK.B 核心仓',
+  core: '核心仓',
   cash: '现金储备',
   wheel: 'TQQQ 车轮',
   leaps: 'QQQ LEAPS',

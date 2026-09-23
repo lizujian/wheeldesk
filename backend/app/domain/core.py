@@ -19,10 +19,15 @@ MONTHLY_FRACTIONS = (
     (Decimal("50"), Decimal("0.05")),
 )
 TIER_RANK = {"monthly": 1, "pullback": 2, "put": 2, "correction": 3, "deep": 4}
-CORE_SYMBOLS = ("BRK.B", "VOO")
+CORE_SYMBOLS = ("BRK.B", "VOO", "SCHD")
+# BRK.B / VOO remains the ratio anchor, while all three core assets can be
+# rotation sources or destinations and participate in the total-weight basis.
+CORE_RATIO_SYMBOLS = ("BRK.B", "VOO")
+CORE_ROTATION_SYMBOLS = CORE_SYMBOLS
 # Core acquisition puts may target SPY even though the long-term core stock
-# rotation universe remains BRK.B / VOO.
+# rotation universe is limited to the three core equities above.
 CORE_PUT_SYMBOLS = (*CORE_SYMBOLS, "SPY")
+CORE_PUT_STRIKE_CAPS = {"BRK.B": Decimal("500"), "SCHD": Decimal("33")}
 
 
 @dataclass(frozen=True)
@@ -123,6 +128,7 @@ class CorePutDecision:
     direct_buy_reserve: Decimal
     contracts: int = 0
     dte_range: tuple[int, int] = (7, 21)
+    strike_cap: Decimal | None = None
 
 
 def evaluate_core_put(
@@ -134,7 +140,8 @@ def evaluate_core_put(
     pending_put_collateral: Decimal,
 ) -> CorePutDecision:
     reserve = (max(available_funding, ZERO) / 2).quantize(CENT)
-    empty = CorePutDecision("waiting", False, None, None, ZERO, reserve)
+    strike_cap = CORE_PUT_STRIKE_CAPS.get(selected.symbol) if selected else None
+    empty = CorePutDecision("waiting", False, None, None, ZERO, reserve, strike_cap=strike_cap)
     if pending_put_collateral > ZERO:
         return replace(empty, code="pending_puts")
     if selected is None or not selected.actionable:
@@ -150,12 +157,15 @@ def evaluate_core_put(
         return empty
     if support_price is None or not ZERO < support_price < selected.price:
         return replace(empty, code="no_support")
-    strike = support_price.quantize(CENT)
+    strike = min(support_price, strike_cap) if strike_cap is not None else support_price
+    if strike <= ZERO or strike >= selected.price:
+        return replace(empty, code="no_support")
     collateral = strike * 100
     funded = collateral <= min(max(available_funding - reserve, ZERO), unplanned_gap)
     return CorePutDecision(
         "opportunity" if funded else "insufficient_reserve",
-        funded, selected.symbol, strike, collateral, reserve, 1 if funded else 0,
+        funded, selected.symbol, strike.quantize(CENT), collateral.quantize(CENT), reserve,
+        1 if funded else 0, (7, 21), strike_cap,
     )
 
 
@@ -231,6 +241,7 @@ def evaluate_core_portfolio(
     rotation_usage: RotationUsage = RotationUsage(),
     pending_brk_shares: Decimal = ZERO,
     pending_voo_shares: Decimal = ZERO,
+    pending_schd_shares: Decimal = ZERO,
     rotation_data_valid: bool = True,
     rotation_prices: dict[str, Decimal] | None = None,
 ) -> CorePortfolioDecision:
@@ -268,7 +279,8 @@ def evaluate_core_portfolio(
         if selected is not None and not daily_limit_open:
             selected = _suppress_asset(selected, "cooldown")
     by_symbol = {asset.symbol: asset for asset in assets}
-    close_prices = rotation_prices or {asset.symbol: asset.price for asset in assets}
+    close_prices = {asset.symbol: asset.price for asset in assets}
+    close_prices.update(rotation_prices or {})
     rotation_values = {
         symbol: asset.current_value / asset.price * close_prices.get(symbol, ZERO) if asset.price > ZERO else ZERO
         for symbol, asset in by_symbol.items()
@@ -277,12 +289,15 @@ def evaluate_core_portfolio(
         full=total_target > ZERO and sum(rotation_values.values(), ZERO) >= full_threshold,
         brk_value=rotation_values.get("BRK.B", ZERO),
         voo_value=rotation_values.get("VOO", ZERO),
+        schd_value=rotation_values.get("SCHD", ZERO),
         brk_price=close_prices.get("BRK.B", ZERO),
         voo_price=close_prices.get("VOO", ZERO),
+        schd_price=close_prices.get("SCHD", ZERO),
         ratios=rotation_ratios or [],
         usage=rotation_usage,
         pending_brk_shares=pending_brk_shares,
         pending_voo_shares=pending_voo_shares,
+        pending_schd_shares=pending_schd_shares,
         data_valid=rotation_data_valid,
         daily_limit_open=daily_limit_open,
     )

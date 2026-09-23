@@ -68,18 +68,18 @@ def test_overview_and_over_budget_put_are_serialized_as_one_snapshot() -> None:
         empty = client.get("/api/wheel/overview")
         assert empty.status_code == 200
         assert empty.json()["budget"] == {
-            "budget": 140625.0,
-            "target_fraction": 0.45,
+            "budget": 78125.0,
+            "target_fraction": 0.25,
             "funded": 100000.0,
-            "funding_gap": 40625.0,
-            "funding_excess": 0.0,
+            "funding_gap": 0.0,
+            "funding_excess": 21875.0,
             "unfunded_exposure": 0.0,
             "exposure": 0.0,
-            "available": 140625.0,
+            "available": 78125.0,
             "over_budget": 0.0,
             "usage_fraction": 0.0,
         }
-        assert empty.json()["recommendations"] == {"first": 84375.0, "second": 56250.0}
+        assert empty.json()["recommendations"] == {"first": 46875.0, "second": 31250.0}
         assert empty.json()["rounds"] == []
 
         created = client.post(
@@ -90,9 +90,9 @@ def test_overview_and_over_budget_put_are_serialized_as_one_snapshot() -> None:
         assert created.status_code == 201
         overview = created.json()
         assert overview["budget"]["exposure"] == 110000.0
-        assert overview["budget"]["over_budget"] == 0.0
-        assert overview["budget"]["available"] == 30625.0
-        assert overview["recommendations"] == {"first": 30625.0, "second": 30625.0}
+        assert overview["budget"]["over_budget"] == 31875.0
+        assert overview["budget"]["available"] == 0.0
+        assert overview["recommendations"] == {"first": 0.0, "second": 0.0}
         put = overview["rounds"][0]["puts"][0]
         assert put["collateral"] == 110000.0
         assert put["opening_dte"] == 34
@@ -159,20 +159,20 @@ def test_target_budget_is_calculated_even_when_wheel_bucket_is_empty() -> None:
 
         assert overview.status_code == 200
         assert overview.json()["budget"] == {
-            "budget": 80876.7,
-            "target_fraction": 0.45,
+            "budget": 44931.5,
+            "target_fraction": 0.25,
             "funded": 0.0,
-            "funding_gap": 80876.7,
+            "funding_gap": 44931.5,
             "funding_excess": 0.0,
             "unfunded_exposure": 0.0,
             "exposure": 0.0,
-            "available": 80876.7,
+            "available": 44931.5,
             "over_budget": 0.0,
             "usage_fraction": 0.0,
         }
         assert overview.json()["recommendations"] == {
-            "first": 48526.02,
-            "second": 32350.68,
+            "first": 26958.9,
+            "second": 17972.6,
         }
 
 

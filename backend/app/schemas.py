@@ -119,8 +119,8 @@ class PositionCreate(BaseModel):
     @model_validator(mode="after")
     def validate_bucket_contract(self):
         if self.bucket == Bucket.CORE:
-            if self.symbol.upper() not in {"BRK.B", "VOO"} or self.asset_type != "equity":
-                raise ValueError("核心仓只允许录入 BRK.B 或 VOO 正股")
+            if self.symbol.upper() not in {"BRK.B", "VOO", "SCHD"} or self.asset_type != "equity":
+                raise ValueError("核心仓只允许录入 BRK.B、VOO 或 SCHD 正股")
         if self.bucket == Bucket.LEAPS:
             if self.asset_type == "equity":
                 if self.symbol.upper() != "QLD" or self.direction.lower() != "long":
@@ -175,7 +175,7 @@ class PositionClose(BaseModel):
 
 class RebalanceCoreSale(BaseModel):
     date: date
-    symbol: Literal["BRK.B", "VOO"] = "BRK.B"
+    symbol: Literal["BRK.B", "VOO", "SCHD"] = "BRK.B"
     quantity: Decimal = Field(gt=0)
     price: Decimal = Field(gt=0)
 

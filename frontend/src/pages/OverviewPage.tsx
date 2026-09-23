@@ -1,30 +1,21 @@
 import { FormEvent, useMemo, useState } from 'react'
-import { ArrowRight, Banknote, CircleDollarSign, Landmark, ShieldAlert, TrendingUp, WalletCards } from 'lucide-react'
-import { Link } from 'react-router-dom'
+import { Banknote, CircleDollarSign, Landmark, ShieldAlert, TrendingUp, WalletCards } from 'lucide-react'
 import { AllocationChart, formatMoney } from '../components/AllocationChart'
-import type { PortfolioSummary, ProfitLedgerSummary } from '../lib/types'
+import type { PortfolioSummary } from '../lib/types'
 import './OverviewPage.css'
 
 const rows = [
-  ['core', 'BRK.B 核心仓', '长期底仓', '#276a9b'],
+  ['core', '核心仓', '长期底仓', '#276a9b'],
   ['cash', '现金储备', '极端行情备用', '#d39b2c'],
   ['options', '期权策略共享池', '车轮与 LEAPS 共用额度', '#138369'],
 ] as const
 
-export function OverviewPage({ portfolio, profitSummary, onInitialize, onAction = async () => {} }: {
+export function OverviewPage({ portfolio, onInitialize }: {
   portfolio: PortfolioSummary
-  profitSummary: ProfitLedgerSummary
   onInitialize: (payload: unknown) => Promise<void>
-  onAction?: (path: string, payload: unknown, method?: 'POST' | 'PATCH' | 'DELETE') => Promise<void>
 }) {
   if (!portfolio.initialized) return <Onboarding onInitialize={onInitialize} />
   const total = portfolio.total_equity ?? 0
-  const cash = portfolio.capital?.cash ?? {
-    total: portfolio.balances?.cash ?? 0, cash_equivalent: 0, liquid: portfolio.balances?.cash ?? 0,
-    occupied: 0,
-    available: portfolio.balances?.cash ?? 0,
-    margin_shortfall: 0,
-  }
   return (
     <div className="page-stack">
       <div className="page-heading"><div><p className="eyebrow">PORTFOLIO CONTROL</p><h1>资产总览</h1></div><span>年龄 {portfolio.age} · 目标按实时权益计算</span></div>
@@ -56,12 +47,6 @@ export function OverviewPage({ portfolio, profitSummary, onInitialize, onAction 
           </div>
         </div>
       </section>
-      <CashTransfer onAction={onAction} cash={cash.available} totalCash={cash.total} />
-      <section className="distribution-band">
-        <div><p className="eyebrow">DISTRIBUTABLE PROFIT</p><h2>当前可分配收益</h2><p>车轮与 LEAPS 已实现盈亏，扣除已确认分配。</p></div>
-        <div className="overview-profit-balance"><span>可用余额</span><strong>{formatMoney(profitSummary.available)}</strong><small>累计已实现 {formatMoney(profitSummary.net_realized)} · 已分配 {formatMoney(profitSummary.allocated)}</small></div>
-        <Link className="secondary-button" to="/profit-ledger">查看收益流水<ArrowRight size={16} /></Link>
-      </section>
     </div>
   )
 }
@@ -75,22 +60,11 @@ function CashControl({ portfolio }: { portfolio: PortfolioSummary }) {
     { label: '账面现金', value: cash.liquid ?? cash.total, icon: Banknote },
     { label: '期权池占用', value: capital?.options?.cash_occupancy ?? 0, icon: CircleDollarSign },
     { label: '可用现金', value: cash.available, icon: Banknote },
-    { label: 'Margin 缺口', value: cash.margin_shortfall, icon: ShieldAlert, danger: cash.margin_shortfall > 0 },
+    { label: '账户现金覆盖缺口', value: cash.margin_shortfall, icon: ShieldAlert, danger: cash.margin_shortfall > 0 },
   ]
   return <section className={`cash-control-strip ${cash.margin_shortfall > 0 ? 'danger' : ''}`} aria-label="现金占用控制">
     {rows.map(({ label, value, icon: Icon, danger }) => <div className={danger ? 'danger' : ''} key={label}><Icon size={17} /><span>{label}</span><strong>{formatMoney(value)}</strong></div>)}
   </section>
-}
-
-function CashTransfer({ onAction, cash, totalCash }: { onAction: (path: string, payload: unknown, method?: 'POST' | 'PATCH' | 'DELETE') => Promise<void>; cash: number; totalCash: number }) {
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    const form = event.currentTarget
-    const data = new FormData(form)
-    await onAction('/portfolio/transfers', { source: 'cash', target: data.get('target'), amount: Number(data.get('amount')), date: data.get('date'), note: data.get('note') }, 'POST')
-    form.reset()
-  }
-  return <section className="cash-transfer-band"><div><p className="eyebrow">CASH ALLOCATION</p><h2>现金资金分配</h2><p>现金桶余额 {formatMoney(totalCash)} · 当前可转出 {formatMoney(cash)}（含 BOXX 现金等价物）</p></div><form aria-label="现金资金分配" onSubmit={submit}><label>日期<input name="date" type="date" defaultValue={new Date().toISOString().slice(0, 10)} required /></label><label>转入资金桶<select name="target" defaultValue="core"><option value="core">BRK.B 核心仓</option><option value="wheel">期权策略共享池</option></select></label><label>金额<input aria-label="金额" name="amount" type="number" min="0.01" max={cash} step="0.01" required /></label><label>备注<input name="note" /></label><button className="primary-button">确认资金分配</button></form></section>
 }
 
 function Metric({ icon: Icon, label, value, tone = '' }: { icon: typeof WalletCards; label: string; value: string; tone?: string }) {
@@ -102,7 +76,7 @@ function Onboarding({ onInitialize }: { onInitialize: (payload: unknown) => Prom
   const [age, setAge] = useState('30')
   const [equity, setEquity] = useState('')
   const preview = useMemo(() => allocationPreview(Number(age), Number(equity)), [age, equity])
-  return <div className="onboarding"><div className="onboarding-copy"><p className="eyebrow">LOCAL LEDGER SETUP</p><h1>建立账户基线</h1><p>初始总金额按年龄公式进入核心仓、现金与期权共享池，后续新增资金统一进入现金储备。</p></div><form onSubmit={async (event: FormEvent<HTMLFormElement>) => {
+  return <div className="onboarding"><div className="onboarding-copy"><p className="eyebrow">LOCAL LEDGER SETUP</p><h1>建立账户基线</h1><p>初始总金额按 70% 核心仓、25% 期权共享池、5% 现金储备分配，后续新增资金统一进入现金储备。</p></div><form onSubmit={async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const data = new FormData(event.currentTarget)
     await onInitialize({
@@ -119,16 +93,14 @@ function Onboarding({ onInitialize }: { onInitialize: (payload: unknown) => Prom
   </form></div>
 }
 
-function allocationPreview(age: number, equity: number) {
-  const core = Math.min(Math.max(age + 20, 0), 80) / 100
+function allocationPreview(_age: number, equity: number) {
+  const core = .70
   const cash = .05
-  const remaining = Math.max(1 - core - cash, 0)
-  const leaps = Math.min(.25, remaining)
-  const wheel = remaining - leaps
+  const options = .25
   return [
-    { label: 'BRK.B 核心仓', fraction: core, amount: equity * core },
+    { label: '核心仓', fraction: core, amount: equity * core },
     { label: '现金储备', fraction: cash, amount: equity * cash },
-    { label: '期权策略共享池', fraction: wheel + leaps, amount: equity * (wheel + leaps) },
+    { label: '期权策略共享池', fraction: options, amount: equity * options },
   ]
 }
 

@@ -108,8 +108,8 @@ def test_rebalancing_does_not_rebalance_between_option_sub_strategies() -> None:
         ).json()
 
         assert "transition" not in payload
-        assert payload["economic"]["buckets"]["options"]["value"] == 34000.0
-        assert payload["economic"]["buckets"]["options"]["target_fraction"] == 0.39
+        assert payload["economic"]["buckets"]["options"]["value"] == 20000.0
+        assert payload["economic"]["buckets"]["options"]["target_fraction"] == 0.25
 
 
 def test_economic_allocation_uses_core_appreciation_and_leaps_drawdown() -> None:
@@ -141,10 +141,10 @@ def test_economic_allocation_uses_core_appreciation_and_leaps_drawdown() -> None
 
         assert payload["assigned"]["total"] == 100000.0
         assert payload["economic"]["total"] == 96000.0
-        assert payload["economic"]["buckets"]["core"]["value"] == 51000.0
-        assert payload["economic"]["buckets"]["options"]["value"] == 40000.0
+        assert payload["economic"]["buckets"]["core"]["value"] == 71000.0
+        assert payload["economic"]["buckets"]["options"]["value"] == 20000.0
         assert payload["economic"]["buckets"]["cash"]["value"] == 5000.0
-        assert payload["economic"]["buckets"]["core"]["fraction"] == 0.53125
+        assert payload["economic"]["buckets"]["core"]["fraction"] == 71000 / 96000
 
 
 def test_recommendations_prioritize_margin_then_cash_restoration() -> None:
@@ -167,9 +167,9 @@ def test_recommendations_prioritize_margin_then_cash_restoration() -> None:
             "/api/rebalancing", params={"as_of": "2026-07-31"}
         ).json()
 
-        assert payload["capital"]["cash"]["margin_shortfall"] == 70000.0
+        assert payload["capital"]["cash"]["margin_shortfall"] == 90000.0
         assert payload["recommendations"][0]["code"] == "eliminate_margin"
-        assert payload["recommendations"][0]["amount"] == 70000.0
+        assert payload["recommendations"][0]["amount"] == 90000.0
         assert payload["recommendations"][1]["code"] == "restore_cash"
 
 
@@ -177,7 +177,7 @@ def test_due_core_overweight_allows_fifo_actual_sale_and_no_trade_confirmation()
     with rebalancing_client() as client:
         initialize(client)
         core = open_core(client, quantity=100, price=500)
-        client.patch(f"/api/positions/{core['id']}/mark", json={"price": 800})
+        client.patch(f"/api/positions/{core['id']}/mark", json={"price": 1100})
 
         evaluated = client.get(
             "/api/rebalancing", params={"as_of": "2026-07-31"}
@@ -185,17 +185,17 @@ def test_due_core_overweight_allows_fifo_actual_sale_and_no_trade_confirmation()
 
         assert evaluated["core_decision"]["code"] == "sell"
         assert evaluated["core_decision"]["actionable"] is True
-        assert evaluated["core_decision"]["sell_amount"] == 8500.0
-        assert evaluated["core_decision"]["estimated_shares"] == 10.625
+        assert evaluated["core_decision"]["sell_amount"] == 10000.0
+        assert evaluated["core_decision"]["estimated_shares"] == 9.0909
 
         sold = client.post(
             "/api/rebalancing/core-sale",
-            json={"date": "2026-07-31", "quantity": 10, "price": 800},
+            json={"date": "2026-07-31", "quantity": 10, "price": 1100},
         )
 
         assert sold.status_code == 200, sold.text
         assert sold.json()["sale"]["cost_basis"] == 5000.0
-        assert sold.json()["sale"]["proceeds"] == 8000.0
+        assert sold.json()["sale"]["proceeds"] == 11000.0
         assert sold.json()["snapshot"]["schedule"]["last_rebalanced_on"] == "2026-07-31"
 
     with rebalancing_client() as client:

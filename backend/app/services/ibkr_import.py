@@ -26,8 +26,9 @@ from app.db_models import (
     WheelShareLot,
 )
 from app.domain.models import Bucket
-from app.domain.core import CORE_PUT_SYMBOLS, CORE_SYMBOLS
+from app.domain.core import CORE_PUT_SYMBOLS, CORE_ROTATION_SYMBOLS, CORE_SYMBOLS
 from app.domain.leaps import LEAPS_CALL_WHEEL_CATEGORY
+from app.domain.pmcc import PMCC_CATEGORIES
 from app.db_models import CoreTradeRecord
 from app.domain.trillion_club import is_club_symbol, is_wheel_club_symbol
 from app.services.portfolio_store import PortfolioStore
@@ -315,13 +316,13 @@ class IbkrImportService:
         return {"imported": len(results), "results": results}
 
     def _record_core_trades(self, rows: list[StatementRow]) -> None:
-        quantities = {symbol: ZERO for symbol in CORE_SYMBOLS}
+        quantities = {symbol: ZERO for symbol in CORE_ROTATION_SYMBOLS}
         has_snapshot = any(_section_key(row.section) == "open_positions" for row in rows)
         trades = []
         occurrences: dict[str, int] = {}
         for row in rows:
             contract = _contract(row.values)
-            if contract is None or contract.asset_type != "equity" or contract.symbol not in CORE_SYMBOLS:
+            if contract is None or contract.asset_type != "equity" or contract.symbol not in CORE_ROTATION_SYMBOLS:
                 continue
             if _section_key(row.section) == "open_positions":
                 quantities[contract.symbol] += contract.quantity
@@ -611,7 +612,7 @@ class IbkrImportService:
         used_slots: dict[str, set[int]],
     ) -> dict[str, Any]:
         symbol = contract.symbol
-        if symbol in {"BRK.B", "VOO", "QLD"}:
+        if symbol in {*CORE_SYMBOLS, "QLD"}:
             bucket = Bucket.LEAPS if symbol == "QLD" else Bucket.CORE
             existing_rows = list(
                 self.session.scalars(
@@ -1170,7 +1171,7 @@ class IbkrImportService:
                 confidence="low",
                 selected=False,
                 can_import=False,
-                message="同一 LEAPS Sell Call 合约存在多条记录，需要人工核对",
+                message="同一 PMCC Short Call 合约存在多条记录，需要人工核对",
                 details=_contract_details(contract, opened_on),
             )
         details = _contract_details(contract, opened_on)
@@ -1193,7 +1194,7 @@ class IbkrImportService:
                 confidence="exact" if exact else confidence,
                 selected=not exact,
                 can_import=not exact,
-                message="LEAPS Sell Call 已经一致" if exact else "更新 LEAPS Sell Call",
+                message="PMCC Short Call 已经一致" if exact else "更新 PMCC Short Call",
                 details=details,
             )
 
@@ -1209,7 +1210,7 @@ class IbkrImportService:
             confidence=confidence,
             selected=True,
             can_import=True,
-            message=f"新增 {contract.symbol} LEAPS Sell Call 轮动，关联 Long Call #{candidate.id}",
+            message=f"新增 {contract.symbol} PMCC Short Call，关联 Long Call #{candidate.id}",
             details=details,
         )
 
@@ -1421,7 +1422,7 @@ class IbkrImportService:
                     confidence="exact",
                     selected=True,
                     can_import=True,
-                    message=f"LEAPS Sell Call 买回平仓，预计已实现 ${details['realized_profit']:,.2f}",
+                    message=f"PMCC Short Call 买回平仓，预计已实现 ${details['realized_profit']:,.2f}",
                     details=details,
                 )
             calls = self._matching_calls(contract)
@@ -1885,10 +1886,10 @@ class IbkrImportService:
             UnmanagedPositionRecord, int(details["holding_id"])
         )
         if record is None or record.status != "open":
-            raise ValueError("待平仓 LEAPS Sell Call 不存在，请重新预览")
+            raise ValueError("待平仓 PMCC Short Call 不存在，请重新预览")
         quantity = Decimal(str(details["quantity"]))
         if quantity != record.quantity:
-            raise ValueError("当前仅支持整笔 LEAPS Sell Call 平仓导入")
+            raise ValueError("当前仅支持整笔 PMCC Short Call 平仓导入")
         exit_price = Decimal(str(details["exit_price"]))
         closed_on = date.fromisoformat(details["closed_on"])
         realized = (
@@ -1923,7 +1924,7 @@ class IbkrImportService:
             realized,
             closed_on,
             profit_source="leaps",
-            note=f"{record.symbol} LEAPS Sell Call 平仓",
+            note=f"{record.symbol} PMCC Short Call 平仓",
         )
         self.session.commit()
         return record.id
@@ -2061,7 +2062,7 @@ class IbkrImportService:
             self.session.scalars(
                 select(UnmanagedPositionRecord).where(
                     UnmanagedPositionRecord.status == "open",
-                    UnmanagedPositionRecord.category == LEAPS_CALL_WHEEL_CATEGORY,
+                    UnmanagedPositionRecord.category.in_(PMCC_CATEGORIES),
                     UnmanagedPositionRecord.symbol == contract.symbol,
                     UnmanagedPositionRecord.asset_type == "option",
                     UnmanagedPositionRecord.direction == "short",
@@ -2076,7 +2077,6 @@ class IbkrImportService:
         self, symbol: str, contracts: int
     ) -> PositionRecord | None:
         if symbol == "QLD":
-            required_quantity = Decimal(contracts * 100)
             candidates = list(
                 self.session.scalars(
                     select(PositionRecord).where(
@@ -2086,25 +2086,39 @@ class IbkrImportService:
                         PositionRecord.asset_type == "equity",
                         PositionRecord.direction == "long",
                         PositionRecord.option_type.is_(None),
-                        PositionRecord.quantity >= required_quantity,
                     )
                 )
             )
-            return candidates[0] if len(candidates) == 1 else None
-        candidates = list(
-            self.session.scalars(
-                select(PositionRecord).where(
-                    PositionRecord.status == "open",
-                    PositionRecord.bucket == Bucket.LEAPS.value,
-                    PositionRecord.symbol == symbol,
-                    PositionRecord.asset_type == "option",
-                    PositionRecord.direction == "long",
-                    PositionRecord.option_type == "call",
-                    PositionRecord.quantity >= contracts,
+        else:
+            candidates = list(
+                self.session.scalars(
+                    select(PositionRecord).where(
+                        PositionRecord.status == "open",
+                        PositionRecord.bucket == Bucket.LEAPS.value,
+                        PositionRecord.symbol == symbol,
+                        PositionRecord.asset_type == "option",
+                        PositionRecord.direction == "long",
+                        PositionRecord.option_type == "call",
+                    )
                 )
             )
-        )
-        return candidates[0] if len(candidates) == 1 else None
+        available: list[PositionRecord] = []
+        for candidate in candidates:
+            coverable = (
+                candidate.quantity / HUNDRED
+                if symbol == "QLD"
+                else candidate.quantity
+            )
+            used = self.session.scalar(
+                select(func.coalesce(func.sum(UnmanagedPositionRecord.quantity), 0)).where(
+                    UnmanagedPositionRecord.status == "open",
+                    UnmanagedPositionRecord.category.in_(PMCC_CATEGORIES),
+                    UnmanagedPositionRecord.linked_position_id == candidate.id,
+                )
+            ) or ZERO
+            if coverable - Decimal(str(used)) >= Decimal(contracts):
+                available.append(candidate)
+        return available[0] if len(available) == 1 else None
 
     def _matching_unmanaged(
         self, contract: Contract, direction: str

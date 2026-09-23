@@ -40,12 +40,12 @@ def test_manual_workflow_from_onboarding_to_profit_redistribution() -> None:
         },
     )
     assert initialized.status_code == 201
-    assert initialized.json()["targets"]["wheel"]["amount"] == 20000.0
+    assert initialized.json()["targets"]["wheel"]["amount"] == 0.0
     assert initialized.json()["other_holdings_value"] == 0.0
     assert initialized.json()["balances"] == {
-        "core": 50000.0,
+        "core": 70000.0,
         "cash": 5000.0,
-        "wheel": 20000.0,
+        "wheel": 0.0,
         "leaps": 25000.0,
         "unallocated": 0.0,
     }
@@ -65,7 +65,7 @@ def test_manual_workflow_from_onboarding_to_profit_redistribution() -> None:
     assert updated_other.status_code == 200
     assert updated_other.json()["other_holdings_value"] == 25000.0
     assert updated_other.json()["total_equity"] == 101000.0
-    assert updated_other.json()["targets"]["wheel"]["amount"] == 20200.0
+    assert updated_other.json()["targets"]["wheel"]["amount"] == 0.0
 
     cleared_other = client.post(
         "/api/portfolio/other-holdings",

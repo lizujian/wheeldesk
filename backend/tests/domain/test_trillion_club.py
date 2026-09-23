@@ -53,13 +53,13 @@ def evaluate(markets=None, positions=None, current=Decimal("0"), entries=None):
     )
 
 
-def test_first_club_entry_uses_the_first_symbol_slot_and_shared_five_percent() -> None:
+def test_first_club_entry_uses_the_first_symbol_slot_and_ten_percent_of_the_individual_pool() -> None:
     decision = evaluate()[0]
 
     assert decision.technical_eligible is True
     assert decision.eligible is True
     assert decision.suggested_slot == 1
-    assert decision.suggested_amount == Decimal("5000.00")
+    assert decision.suggested_amount == Decimal("2500.00")
     assert decision.open_slots == ()
 
 

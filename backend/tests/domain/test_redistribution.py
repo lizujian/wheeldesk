@@ -20,9 +20,9 @@ def test_distribution_refills_cash_then_core_before_option_pools() -> None:
     )
 
     assert recommendation.allocations[Bucket.CASH] == Decimal("0.00")
-    assert recommendation.allocations[Bucket.CORE] == Decimal("2000.00")
+    assert recommendation.allocations[Bucket.CORE] == Decimal("10000.00")
     assert recommendation.allocations[Bucket.LEAPS] == Decimal("0.00")
-    assert recommendation.allocations[Bucket.WHEEL] == Decimal("8000.00")
+    assert recommendation.allocations[Bucket.WHEEL] == Decimal("0.00")
     assert recommendation.unallocated == Decimal("0.00")
 
 
@@ -33,14 +33,14 @@ def test_remaining_profit_goes_to_the_shared_option_pool() -> None:
         age=30,
         current_values={
             Bucket.CASH: Decimal("10000"),
-            Bucket.CORE: Decimal("50000"),
-            Bucket.WHEEL: Decimal("20000"),
+            Bucket.CORE: Decimal("70000"),
+            Bucket.WHEEL: Decimal("2000"),
             Bucket.LEAPS: Decimal("4000"),
         },
     )
 
-    assert recommendation.allocations[Bucket.WHEEL] == Decimal("8000.00")
-    assert recommendation.allocations[Bucket.LEAPS] == Decimal("0.00")
+    assert recommendation.allocations[Bucket.WHEEL] == Decimal("0.00")
+    assert recommendation.allocations[Bucket.LEAPS] == Decimal("8000.00")
 
 
 def test_leaps_at_cap_receives_no_more_profit() -> None:
@@ -50,14 +50,15 @@ def test_leaps_at_cap_receives_no_more_profit() -> None:
         age=30,
         current_values={
             Bucket.CASH: Decimal("10000"),
-            Bucket.CORE: Decimal("50000"),
+            Bucket.CORE: Decimal("70000"),
             Bucket.WHEEL: Decimal("16000"),
             Bucket.LEAPS: Decimal("25000"),
         },
     )
 
     assert recommendation.allocations[Bucket.LEAPS] == Decimal("0.00")
-    assert recommendation.allocations[Bucket.WHEEL] == Decimal("4000.00")
+    assert recommendation.allocations[Bucket.WHEEL] == Decimal("0.00")
+    assert recommendation.unallocated == Decimal("4000.00")
 
 
 def test_distribution_rejects_non_positive_profit() -> None:

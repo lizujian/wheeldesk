@@ -6,36 +6,36 @@ from app.domain.allocation import allocation_targets, opening_allocation
 from app.domain.models import Bucket
 
 
-def test_allocation_targets_split_remaining_capital_for_age_30() -> None:
+def test_allocation_targets_use_seventy_twenty_five_five_for_age_30() -> None:
     targets = allocation_targets(age=30)
 
     assert targets == {
-        Bucket.CORE: Decimal("0.50"),
+        Bucket.CORE: Decimal("0.70"),
         Bucket.CASH: Decimal("0.05"),
-        Bucket.WHEEL: Decimal("0.20"),
+        Bucket.WHEEL: Decimal("0.00"),
         Bucket.LEAPS: Decimal("0.25"),
     }
 
 
-def test_allocation_targets_give_age_36_a_14_percent_wheel_budget() -> None:
+def test_allocation_targets_are_stable_across_age() -> None:
     targets = allocation_targets(age=36)
 
     assert targets == {
-        Bucket.CORE: Decimal("0.56"),
+        Bucket.CORE: Decimal("0.70"),
         Bucket.CASH: Decimal("0.05"),
-        Bucket.WHEEL: Decimal("0.14"),
+        Bucket.WHEEL: Decimal("0.00"),
         Bucket.LEAPS: Decimal("0.25"),
     }
 
 
-def test_core_target_is_capped_at_80_percent() -> None:
+def test_allocation_targets_are_stable_at_high_age() -> None:
     targets = allocation_targets(age=70)
 
     assert targets == {
-        Bucket.CORE: Decimal("0.80"),
+        Bucket.CORE: Decimal("0.70"),
         Bucket.CASH: Decimal("0.05"),
         Bucket.WHEEL: Decimal("0.00"),
-        Bucket.LEAPS: Decimal("0.15"),
+        Bucket.LEAPS: Decimal("0.25"),
     }
 
 

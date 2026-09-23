@@ -94,7 +94,7 @@ describe('distributable profit ledger page', () => {
 
     expect(onRedistribute).toHaveBeenCalledWith(1200)
     expect(onAction).not.toHaveBeenCalled()
-    expect(screen.getByText('BRK.B 核心仓')).toBeInTheDocument()
+    expect(screen.getByText('核心仓')).toBeInTheDocument()
     expect(screen.getByText('$700.00')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '确认本次已分配' }))
 

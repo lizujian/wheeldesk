@@ -80,13 +80,13 @@ describe('operating pages', () => {
   it('previews formula allocations and initializes without manual bucket amounts', async () => {
     const user = userEvent.setup()
     const onInitialize = vi.fn().mockResolvedValue(undefined)
-    render(<MemoryRouter><OverviewPage portfolio={{ initialized: false }} profitSummary={{ wheel_realized: 0, leaps_realized: 0, other_realized: 0, net_realized: 0, allocated: 0, available: 0 }} onInitialize={onInitialize} /></MemoryRouter>)
+    render(<MemoryRouter><OverviewPage portfolio={{ initialized: false }} onInitialize={onInitialize} /></MemoryRouter>)
 
     await user.type(screen.getByLabelText('初始总金额'), '100000')
-    expect(screen.getByText('BRK.B 核心仓 · 50%')).toBeInTheDocument()
+    expect(screen.getByText('核心仓 · 70%')).toBeInTheDocument()
     expect(screen.getByText('现金储备 · 5%')).toBeInTheDocument()
-    expect(screen.getByText('期权策略共享池 · 45%')).toBeInTheDocument()
-    expect(screen.getByText('$45,000.00')).toBeInTheDocument()
+    expect(screen.getByText('期权策略共享池 · 25%')).toBeInTheDocument()
+    expect(screen.getByText('$25,000.00')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '确认并建立账本' }))
 
     expect(onInitialize).toHaveBeenCalledWith({
@@ -94,25 +94,22 @@ describe('operating pages', () => {
       opening_equity: 100000,
       opening_date: expect.any(String),
     })
-    expect(screen.queryByRole('spinbutton', { name: 'BRK.B' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('form', { name: '现金资金分配' })).not.toBeInTheDocument()
   })
 
   it('shows actual allocation and target variance', () => {
-    render(<MemoryRouter><OverviewPage portfolio={portfolio} profitSummary={{ wheel_realized: 2400, leaps_realized: 5600, other_realized: 0, net_realized: 8000, allocated: 3000, available: 5000 }} onInitialize={async () => {}} onAction={async () => {}} /></MemoryRouter>)
+    render(<MemoryRouter><OverviewPage portfolio={portfolio} onInitialize={async () => {}} /></MemoryRouter>)
 
     expect(screen.getByText('$100,000.00')).toBeInTheDocument()
-    expect(screen.getAllByText('BRK.B 核心仓')).toHaveLength(2)
+    expect(screen.getByText('核心仓')).toBeInTheDocument()
     expect(screen.getByText('低配 $5,000.00')).toBeInTheDocument()
-    expect(screen.getByText('当前可分配收益')).toBeInTheDocument()
-    expect(within(screen.getByText('可用余额').parentElement!).getByText('$5,000.00')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: '查看收益流水' })).toHaveAttribute('href', '/profit-ledger')
   })
 
   it('calculates target gaps from deployed positions instead of assigned buckets', () => {
     render(<MemoryRouter><OverviewPage portfolio={{
       ...portfolio,
       deployments: { core: 7000, cash: 5000, wheel: 40000, leaps: 0, options: 40000 },
-    }} profitSummary={{ wheel_realized: 0, leaps_realized: 0, other_realized: 0, net_realized: 0, allocated: 0, available: 0 }} onInitialize={async () => {}} /></MemoryRouter>)
+    }} onInitialize={async () => {}} /></MemoryRouter>)
 
     expect(screen.getByText('低配 $43,000.00')).toBeInTheDocument()
     expect(screen.getByText('低配 $5,000.00')).toBeInTheDocument()
@@ -130,7 +127,7 @@ describe('operating pages', () => {
     expect(screen.getByText(/30–45 DTE/)).toBeInTheDocument()
   })
 
-  it('renders all five LEAPS slots and sample-data provenance', () => {
+  it('renders the combined LEAPS console and sample-data provenance', () => {
     render(
       <MemoryRouter>
         <LeapsPage market={market} positions={[]} portfolio={{
@@ -141,12 +138,14 @@ describe('operating pages', () => {
       </MemoryRouter>,
     )
 
-    for (let slot = 1; slot <= 5; slot += 1) expect(screen.getByRole('article', { name: `LEAPS 容量槽位 ${slot}` })).toBeInTheDocument()
+    expect(screen.queryByRole('article', { name: 'LEAPS 容量槽位 1' })).not.toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'QQQ / QLD 当前持仓' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '万亿俱乐部 LEAPS' })).toBeInTheDocument()
     expect(screen.getByText('模拟数据')).toBeInTheDocument()
-    expect(screen.getByText('期权共享本金')).toBeInTheDocument()
-    expect(screen.getByText('共享成本占用')).toBeInTheDocument()
-    expect(screen.getByText('共享可用本金')).toBeInTheDocument()
-    expect(screen.getByText(/车轮与 LEAPS 共同目标 45.0%/)).toBeInTheDocument()
+    expect(screen.getByText('PMCC 风险预算')).toBeInTheDocument()
+    expect(screen.getByText('Long LEAPS 借方占用')).toBeInTheDocument()
+    expect(screen.getByText('PMCC 可用额度')).toBeInTheDocument()
+    expect(screen.getByText(/总资产 25% · QQQ 10% \+ 个股 15%/)).toBeInTheDocument()
   })
 
   it('shows a read-only operation ledger sourced from IBKR reports', () => {
@@ -160,20 +159,7 @@ describe('operating pages', () => {
     expect(screen.queryByRole('button', { name: '录入持仓' })).not.toBeInTheDocument()
   })
 
-  it('moves ordinary cash allocation controls to the overview', async () => {
-    const user = userEvent.setup()
-    const onAction = vi.fn().mockResolvedValue(undefined)
-    render(<MemoryRouter><OverviewPage portfolio={portfolio} profitSummary={{ wheel_realized: 0, leaps_realized: 0, other_realized: 0, net_realized: 0, allocated: 0, available: 0 }} onInitialize={async () => {}} onAction={onAction} /></MemoryRouter>)
-
-    const form = screen.getByRole('form', { name: '现金资金分配' })
-    await user.selectOptions(within(form).getByLabelText('转入资金桶'), 'core')
-    await user.type(within(form).getByLabelText('金额'), '3000')
-    await user.click(within(form).getByRole('button', { name: '确认资金分配' }))
-
-    expect(onAction).toHaveBeenCalledWith('/portfolio/transfers', expect.objectContaining({ source: 'cash', target: 'core', amount: 3000 }), 'POST')
-  })
-
-  it('shows occupied cash and caps transfers at available cash', () => {
+  it('shows occupied cash without exposing transfer controls', () => {
     const withCapital = {
       ...portfolio,
       capital: {
@@ -184,12 +170,13 @@ describe('operating pages', () => {
         cash: { total: 10000, occupied: 5000, available: 5000, margin_shortfall: 0 },
       },
     }
-    render(<MemoryRouter><OverviewPage portfolio={withCapital} profitSummary={{ wheel_realized: 0, leaps_realized: 0, other_realized: 0, net_realized: 0, allocated: 0, available: 0 }} onInitialize={async () => {}} /></MemoryRouter>)
+    render(<MemoryRouter><OverviewPage portfolio={withCapital} onInitialize={async () => {}} /></MemoryRouter>)
 
     expect(screen.getByText('期权池占用')).toBeInTheDocument()
     expect(screen.getByText('可用现金')).toBeInTheDocument()
-    expect(screen.getByText('Margin 缺口')).toBeInTheDocument()
-    expect(screen.getByRole('spinbutton', { name: '金额' })).toHaveAttribute('max', '5000')
+    expect(screen.getByText('账户现金覆盖缺口')).toBeInTheDocument()
+    expect(screen.queryByRole('form', { name: '现金资金分配' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('spinbutton', { name: '金额' })).not.toBeInTheDocument()
     expect(screen.queryByText('待分配')).not.toBeInTheDocument()
   })
 

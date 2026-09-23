@@ -1,5 +1,4 @@
 import { render, screen, within } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 
@@ -72,8 +71,8 @@ function position(overrides: Partial<Position> = {}): Position {
   }
 }
 
-describe('LEAPS five-slot console', () => {
-  it('shows a QLD replacement Sell Call in the QQQ / QLD tab', () => {
+describe('LEAPS combined console', () => {
+  it('shows a QLD replacement Sell Call in the QQQ / QLD register', () => {
     const qldCall: OtherHolding = {
       id: 19, category: 'leaps_call_wheel', symbol: 'QLD', asset_type: 'option', direction: 'short', option_type: 'call',
       quantity: 1, multiplier: 100, entry_price: 2.12, current_price: 2.64, current_value: -264, absolute_value: 264,
@@ -84,13 +83,13 @@ describe('LEAPS five-slot console', () => {
     render(<MemoryRouter><LeapsPage market={market} positions={[]} portfolio={portfolio} leapsCalls={[qldCall]} /></MemoryRouter>)
 
     const register = screen.getByRole('region', { name: 'QQQ / QLD 当前持仓' })
-    expect(within(register).getByText('LEAPS Sell Call 轮动')).toBeInTheDocument()
-    expect(within(register).getByText('QLD')).toBeInTheDocument()
-    expect(screen.queryByRole('region', { name: '万亿俱乐部 LEAPS' })).not.toBeInTheDocument()
+    const cluster = within(register).getByRole('region', { name: 'QLD 策略簇' })
+    expect(within(cluster).getByText('PMCC Short Call')).toBeInTheDocument()
+    expect(within(cluster).getByRole('heading', { name: 'QLD' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '万亿俱乐部 LEAPS' })).toBeInTheDocument()
   })
 
-  it('shows a covered LEAPS Sell Call under the matching club tab', async () => {
-    const user = userEvent.setup()
+  it('shows a covered LEAPS Sell Call under the matching club register', () => {
     const leapsCall: OtherHolding = {
       id: 18, category: 'leaps_call_wheel', symbol: 'GOOG', asset_type: 'option', direction: 'short', option_type: 'call',
       quantity: 1, multiplier: 100, entry_price: 3.5, current_price: 3.975, current_value: -397.5, absolute_value: 397.5,
@@ -98,35 +97,57 @@ describe('LEAPS five-slot console', () => {
       exit_price: null, realized_profit: null, quote_source: 'ibkr_statement', quote_as_of: '2026-09-14', quote_status: 'updated', last_error: null,
       linked_position_id: 7,
     }
-    render(<MemoryRouter><LeapsPage market={market} positions={[]} portfolio={portfolio} leapsCalls={[leapsCall]} /></MemoryRouter>)
-
-    expect(screen.queryByText('LEAPS Sell Call 轮动')).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: /万亿俱乐部 Long Call/ }))
+    const googPosition = position({ id: 7, symbol: 'GOOG', leaps_category: 'club' })
+    render(<MemoryRouter><LeapsPage market={market} positions={[googPosition]} portfolio={portfolio} leapsCalls={[leapsCall]} /></MemoryRouter>)
 
     const register = screen.getByRole('region', { name: '万亿俱乐部当前持仓' })
-    expect(within(register).getByText('LEAPS Sell Call 轮动')).toBeInTheDocument()
-    expect(within(register).getByText('GOOG')).toBeInTheDocument()
-    expect(within(register).getByText('关联 Long Call #7')).toBeInTheDocument()
+    const cluster = within(register).getByRole('region', { name: 'GOOG 策略簇' })
+    expect(within(cluster).getByRole('article', { name: 'LEAPS 持仓 7' })).toBeInTheDocument()
+    expect(within(cluster).getByRole('article', { name: 'GOOG PMCC Short Call 18' })).toBeInTheDocument()
+    expect(within(cluster).getByText('PMCC Short Call')).toBeInTheDocument()
+    expect(within(cluster).getByText('关联 Long Call #7')).toBeInTheDocument()
   })
 
-  it('switches between QQQ slots and the trillion-club console without stacking both strategies', async () => {
-    const user = userEvent.setup()
+  it('keeps Eli Lilly and Berkshire out of the trillion-club register', () => {
+    const excludedPositions = [
+      position({ id: 31, symbol: 'LLY', leaps_category: 'club' }),
+      position({ id: 32, symbol: 'BRK.B', leaps_category: 'club' }),
+    ]
+    const excludedCalls: OtherHolding[] = [
+      {
+        id: 33, category: 'leaps_call_wheel', symbol: 'LLY', asset_type: 'option', direction: 'short', option_type: 'call',
+        quantity: 1, multiplier: 100, entry_price: 3, current_price: 3.5, current_value: -350, absolute_value: 350,
+        unrealized_profit: -50, opened_on: '2026-09-14', expiration: '2026-10-02', strike: 900, status: 'open', closed_on: null,
+        exit_price: null, realized_profit: null, quote_source: 'ibkr_statement', quote_as_of: '2026-09-14', quote_status: 'updated', last_error: null,
+        linked_position_id: 31,
+      },
+      {
+        id: 34, category: 'leaps_call_wheel', symbol: 'BRK-B', asset_type: 'option', direction: 'short', option_type: 'call',
+        quantity: 1, multiplier: 100, entry_price: 3, current_price: 3.5, current_value: -350, absolute_value: 350,
+        unrealized_profit: -50, opened_on: '2026-09-14', expiration: '2026-10-02', strike: 500, status: 'open', closed_on: null,
+        exit_price: null, realized_profit: null, quote_source: 'ibkr_statement', quote_as_of: '2026-09-14', quote_status: 'updated', last_error: null,
+        linked_position_id: 32,
+      },
+    ]
+    render(<MemoryRouter><LeapsPage market={market} positions={excludedPositions} portfolio={portfolio} leapsCalls={excludedCalls} /></MemoryRouter>)
+
+    const register = screen.getByRole('region', { name: '万亿俱乐部当前持仓' })
+    expect(within(register).getByText('尚无万亿俱乐部 Long Call 持仓')).toBeInTheDocument()
+    expect(within(register).queryByRole('article', { name: 'LEAPS 持仓 31' })).not.toBeInTheDocument()
+    expect(within(register).queryByRole('article', { name: 'LEAPS 持仓 32' })).not.toBeInTheDocument()
+    expect(within(register).queryByRole('article', { name: /LLY PMCC Short Call/ })).not.toBeInTheDocument()
+    expect(within(register).queryByRole('article', { name: /BRK-B PMCC Short Call/ })).not.toBeInTheDocument()
+  })
+
+  it('shows QQQ and trillion-club strategies together without tabs', () => {
     render(<MemoryRouter><LeapsPage market={market} positions={[]} portfolio={portfolio} /></MemoryRouter>)
 
-    const qqqTab = screen.getByRole('button', { name: /QQQ \/ QLD 五槽位/ })
-    const clubTab = screen.getByRole('button', { name: /万亿俱乐部 Long Call/ })
-    expect(qqqTab).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByRole('region', { name: 'LEAPS 入场信号' })).toBeInTheDocument()
-    expect(screen.queryByRole('region', { name: '万亿俱乐部 LEAPS' })).not.toBeInTheDocument()
-
-    await user.click(clubTab)
-
-    expect(clubTab).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.queryByRole('region', { name: 'LEAPS 入场信号' })).not.toBeInTheDocument()
     expect(screen.getByRole('region', { name: '万亿俱乐部 LEAPS' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /万亿俱乐部 Long Call/ })).not.toBeInTheDocument()
   })
 
-  it('shows the live entry signal and five fixed 5% slots', () => {
+  it('shows the live entry signal without a separate slot capacity panel', () => {
     render(<MemoryRouter><LeapsPage market={market} positions={[]} portfolio={portfolio} /></MemoryRouter>)
 
     const signal = screen.getByRole('region', { name: 'LEAPS 入场信号' })
@@ -137,20 +158,18 @@ describe('LEAPS five-slot console', () => {
     expect(within(signal).getByText('-1.20%')).toBeInTheDocument()
     expect(within(signal).getByText('同一交易日尚未执行')).toBeInTheDocument()
 
-    for (let slot = 1; slot <= 5; slot += 1) {
-      const row = screen.getByRole('article', { name: `LEAPS 容量槽位 ${slot}` })
-      expect(row).toHaveTextContent('$5,000.00')
-    }
     expect(screen.getByText('尚无 QQQ Call 或 QLD 持仓')).toBeInTheDocument()
-    expect(screen.getByRole('article', { name: 'LEAPS 容量槽位 1' })).toHaveClass('eligible')
-    expect(screen.getByRole('article', { name: 'LEAPS 容量槽位 2' })).not.toHaveClass('eligible')
+    expect(screen.queryByText('五槽位容量')).not.toBeInTheDocument()
+    expect(screen.queryByRole('article', { name: 'LEAPS 容量槽位 1' })).not.toBeInTheDocument()
   })
 
-  it('shows signal slots without exposing manual trade forms', () => {
+  it('shows signal details without exposing manual trade forms', () => {
     render(<MemoryRouter><LeapsPage market={market} positions={[]} portfolio={portfolio} /></MemoryRouter>)
 
     expect(screen.queryByText('数据来源')).not.toBeInTheDocument()
     expect(screen.queryByText('IBKR 报表同步')).not.toBeInTheDocument()
+    expect(screen.queryByText('Margin 缺口')).not.toBeInTheDocument()
+    expect(screen.queryByText('账户现金覆盖缺口')).not.toBeInTheDocument()
     expect(screen.queryByRole('form')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /记录槽位|卖出槽位/ })).not.toBeInTheDocument()
   })
@@ -169,7 +188,6 @@ describe('LEAPS five-slot console', () => {
     const holding = screen.getByRole('article', { name: 'LEAPS 持仓 7' })
     expect(holding).toHaveClass('fifo-candidate')
     expect(within(holding).getByText('FIFO 待轮动')).toBeInTheDocument()
-    expect(screen.getByRole('article', { name: 'LEAPS 容量槽位 1' })).toHaveClass('fifo')
     expect(fifoAlert).toHaveTextContent('下一份 IBKR 报表会同步槽位记录')
   })
 
@@ -191,8 +209,7 @@ describe('LEAPS five-slot console', () => {
     expect(within(screen.getByRole('article', { name: 'LEAPS 持仓 15' })).getByText('继续持有 · 目标 5%')).toBeInTheDocument()
   })
 
-  it('shows an independent trillion-club stock row without manual entry controls', async () => {
-    const user = userEvent.setup()
+  it('shows an independent trillion-club holding without manual entry controls', () => {
     const clubMarket: MarketSnapshot = {
       ...market,
       leaps_club: {
@@ -213,20 +230,17 @@ describe('LEAPS five-slot console', () => {
     const clubPosition = position({ id: 21, symbol: 'AAPL', leaps_category: 'club', tranche: 1 })
     render(<MemoryRouter><LeapsPage market={clubMarket} positions={[clubPosition]} portfolio={portfolio} /></MemoryRouter>)
 
-    await user.click(screen.getByRole('button', { name: /万亿俱乐部 Long Call/ }))
-    expect(screen.getByRole('region', { name: '万亿俱乐部当前持仓' })).toBeInTheDocument()
-    expect(screen.getByRole('article', { name: 'LEAPS 持仓 21' })).toBeInTheDocument()
-    const row = screen.getByRole('article', { name: 'AAPL 万亿俱乐部' })
-    expect(within(row).getByText('$4.20T · 2026-06-30')).toBeInTheDocument()
-    expect(within(row).getByText('RSI 41.0')).toHaveClass('pass')
-    expect(screen.getByText(/明确排除 MU、ORCL、WMT/)).toBeInTheDocument()
+    const register = screen.getByRole('region', { name: '万亿俱乐部当前持仓' })
+    const holding = within(register).getByRole('article', { name: 'LEAPS 持仓 21' })
+    expect(within(holding).getByText('AAPL')).toBeInTheDocument()
     expect(screen.queryByText('数据来源')).not.toBeInTheDocument()
-    expect(within(row).queryByText('IBKR 报表同步')).not.toBeInTheDocument()
-    expect(within(row).queryByRole('form')).not.toBeInTheDocument()
+    expect(within(register).queryByText('$4.20T · 2026-06-30')).not.toBeInTheDocument()
+    expect(within(register).queryByText('RSI 41.0')).not.toBeInTheDocument()
+    expect(within(register).queryByText('IBKR 报表同步')).not.toBeInTheDocument()
+    expect(within(register).queryByRole('form')).not.toBeInTheDocument()
   })
 
-  it('shows the realized loss from the closed contract inside a rolled synthetic holding', async () => {
-    const user = userEvent.setup()
+  it('shows the realized loss from the closed contract inside a rolled synthetic holding', () => {
     const previous = position({
       id: 5,
       symbol: 'MSFT',
@@ -259,8 +273,6 @@ describe('LEAPS five-slot console', () => {
     })
 
     render(<MemoryRouter><LeapsPage market={market} positions={[current, previous]} portfolio={portfolio} /></MemoryRouter>)
-    await user.click(screen.getByRole('button', { name: /万亿俱乐部 Long Call/ }))
-
     const roll = screen.getByRole('region', { name: 'MSFT 展期记录 5 到 6' })
     expect(within(roll).getByText('2026-12-18 $400 Call')).toBeInTheDocument()
     expect(within(roll).getByText('平仓 $45.00')).toBeInTheDocument()
@@ -268,8 +280,7 @@ describe('LEAPS five-slot console', () => {
     expect(within(roll).getByText('净支出 $500.00')).toBeInTheDocument()
   })
 
-  it('orders trillion-club stocks from the largest daily drop to the largest gain', async () => {
-    const user = userEvent.setup()
+  it('keeps the trillion-club area focused on rules and holdings', () => {
     const baseDecision = {
       name: 'Apple', technical_eligible: false, eligible: false,
       suggested_slot: 1, suggested_amount: 0, over_shared_budget: false,
@@ -278,26 +289,20 @@ describe('LEAPS five-slot console', () => {
       market_cap: 2_000_000_000_000, market_cap_as_of: '2026-06-30', market_cap_currency: 'USD',
       open_slots: [], fifo_candidate_position_id: null, fifo_candidate_slot: null, risk_position_ids: [],
     }
-    const sortedMarket: MarketSnapshot = {
+    const clubMarket: MarketSnapshot = {
       ...market,
       leaps_club: {
-        decisions: [
-          { ...baseDecision, symbol: 'NVDA', name: 'NVIDIA', change_fraction: .021 },
-          { ...baseDecision, symbol: 'AAPL', name: 'Apple', change_fraction: -.061 },
-          { ...baseDecision, symbol: 'MSFT', name: 'Microsoft', change_fraction: -.018 },
-        ],
+        decisions: [{ ...baseDecision, symbol: 'AAPL', name: 'Apple', change_fraction: -.061 }],
         unavailable: [],
         exclusions: [],
       },
     }
 
-    render(<MemoryRouter><LeapsPage market={sortedMarket} positions={[]} portfolio={portfolio} /></MemoryRouter>)
+    render(<MemoryRouter><LeapsPage market={clubMarket} positions={[]} portfolio={portfolio} /></MemoryRouter>)
 
-    await user.click(screen.getByRole('button', { name: /万亿俱乐部 Long Call/ }))
-    expect(screen.getAllByRole('article', { name: /万亿俱乐部/ }).map((row) => row.getAttribute('aria-label'))).toEqual([
-      'AAPL 万亿俱乐部',
-      'MSFT 万亿俱乐部',
-      'NVDA 万亿俱乐部',
-    ])
+    const club = screen.getByRole('region', { name: '万亿俱乐部 LEAPS' })
+    expect(within(club).getByText('资格门槛')).toBeInTheDocument()
+    expect(within(club).getByText('尚无万亿俱乐部 Long Call 持仓')).toBeInTheDocument()
+    expect(within(club).queryByText('AAPL')).not.toBeInTheDocument()
   })
 })

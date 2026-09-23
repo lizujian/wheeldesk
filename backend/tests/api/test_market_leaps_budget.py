@@ -89,7 +89,7 @@ def test_funded_leaps_bucket_does_not_count_as_an_open_leaps_position() -> None:
         assert payload["leaps_session"]["change_fraction"] < -0.01
         first = payload["leaps"][0]
         assert first["eligible"] is True, first
-        assert first["suggested_amount"] == 5000.0
+        assert first["suggested_amount"] == 2000.0
         assert first["checks"]["above_ma200"] is True
         assert first["checks"]["rsi_below_45"] is True
         assert first["checks"]["daily_drop"] is True

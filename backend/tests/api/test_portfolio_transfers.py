@@ -57,6 +57,18 @@ def test_internal_option_transfer_does_not_change_shared_capacity() -> None:
         )
         assert opened.status_code == 201, opened.text
 
+        seeded = client.post(
+            "/api/portfolio/transfers",
+            json={
+                "source": "leaps",
+                "target": "wheel",
+                "amount": 14000,
+                "date": "2026-08-04",
+                "note": "测试历史 Wheel 资金迁移",
+            },
+        )
+        assert seeded.status_code == 200, seeded.text
+
         accepted = client.post(
             "/api/portfolio/transfers",
             json={
@@ -70,10 +82,10 @@ def test_internal_option_transfer_does_not_change_shared_capacity() -> None:
 
         assert accepted.status_code == 200, accepted.text
         assert accepted.json()["balances"]["wheel"] == 0.0
-        assert accepted.json()["balances"]["leaps"] == 39000.0
+        assert accepted.json()["balances"]["leaps"] == 25000.0
         assert accepted.json()["capital"]["options"] == {
-            "assigned": 39000.0,
+            "assigned": 25000.0,
             "committed": 10000.0,
-            "available": 29000.0,
+            "available": 15000.0,
             "cash_occupancy": 0.0,
         }

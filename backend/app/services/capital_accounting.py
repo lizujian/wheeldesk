@@ -13,6 +13,7 @@ from app.db_models import (
 )
 from app.domain.capital import CashCapacity, StrategyCapacity, cash_capacity, strategy_capacity
 from app.domain.models import Bucket
+from app.services.pmcc import pmcc_snapshot
 
 ZERO = Decimal("0")
 
@@ -23,6 +24,7 @@ class CapitalSnapshot:
     wheel: StrategyCapacity
     leaps: StrategyCapacity
     options: StrategyCapacity
+    pmcc: dict
     cash: CashCapacity
 
     def payload(self) -> dict:
@@ -31,6 +33,7 @@ class CapitalSnapshot:
             "wheel": _strategy_payload(self.wheel),
             "leaps": _strategy_payload(self.leaps),
             "options": _strategy_payload(self.options),
+            "pmcc": self.pmcc,
             "cash": {
                 "total": self.cash.total,
                 "cash_equivalent": self.cash.cash_equivalent,
@@ -115,6 +118,11 @@ class CapitalAccountingService:
             wheel.assigned + leaps.assigned,
             wheel.committed + leaps.committed,
         )
+        total_equity = sum(balances.values(), ZERO)
+        pmcc = pmcc_snapshot(self.session, as_of=None)
+        # Keep PMCC exposure visible without adding the short-call mark to
+        # committed capital; the Long LEAPS debit is already in `leaps`.
+        pmcc["total_equity"] = total_equity.quantize(Decimal("0.01"))
         cash = cash_capacity(
             balances.get(Bucket.CASH.value, ZERO),
             cash_equivalent=self._cash_equivalent_value(),
@@ -125,6 +133,7 @@ class CapitalAccountingService:
             wheel=wheel,
             leaps=leaps,
             options=options,
+            pmcc=pmcc,
             cash=cash,
         )
 

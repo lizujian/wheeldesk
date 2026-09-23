@@ -3,6 +3,9 @@ from datetime import date
 from decimal import Decimal
 
 ZERO = Decimal("0")
+PMCC_CATEGORY = "pmcc"
+# Kept as the storage value for historical IBKR imports. The PMCC domain
+# model treats both this value and the new category as the same strategy.
 LEAPS_CALL_WHEEL_CATEGORY = "leaps_call_wheel"
 
 
@@ -62,11 +65,13 @@ def evaluate_leaps_tranches(
     shared_current: Decimal | None = None,
     shared_target: Decimal | None = None,
 ) -> list[LeapsTrancheDecision]:
-    capacity = max(
-        (shared_target if shared_target is not None else bucket_target)
-        - (shared_current if shared_current is not None else bucket_current),
-        ZERO,
+    local_capacity = max(bucket_target - bucket_current, ZERO)
+    shared_capacity = (
+        max(shared_target - shared_current, ZERO)
+        if shared_target is not None and shared_current is not None
+        else local_capacity
     )
+    capacity = min(local_capacity, shared_capacity)
     available_tranches = [value for value in range(1, 6) if value not in used_tranches]
     next_tranche = available_tranches[0] if available_tranches else None
     daily_limit = last_entry_date != as_of

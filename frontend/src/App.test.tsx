@@ -9,7 +9,7 @@ import { AppShell } from './components/AppShell'
 describe('App', () => {
   beforeEach(() => { vi.spyOn(window, 'scrollTo').mockImplementation(() => {}) })
 
-  it('renders the operating-console destinations including rebalancing', () => {
+  it('renders the operating-console destinations without manual ledger modules', () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')))
     render(
       <MemoryRouter>
@@ -18,9 +18,13 @@ describe('App', () => {
     )
 
     const navigation = screen.getByRole('navigation', { name: '主导航' })
-    for (const label of ['总览', '核心仓', '车轮', 'LEAPS', '再平衡', '收益', '账本', '其他', '导入', '信号', '设置']) {
+    for (const label of ['总览', '核心仓', 'LEAPS', '其他', '导入', '信号', '设置']) {
       expect(within(navigation).getByRole('link', { name: label })).toBeInTheDocument()
     }
+    expect(within(navigation).queryByRole('link', { name: '再平衡' })).not.toBeInTheDocument()
+    expect(within(navigation).queryByRole('link', { name: '账本' })).not.toBeInTheDocument()
+    expect(within(navigation).queryByRole('link', { name: '收益' })).not.toBeInTheDocument()
+    expect(within(navigation).queryByRole('link', { name: '车轮' })).not.toBeInTheDocument()
     expect(within(navigation).queryByRole('link', { name: '待退出仓' })).not.toBeInTheDocument()
   })
 

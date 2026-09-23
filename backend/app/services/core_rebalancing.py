@@ -21,8 +21,8 @@ class CoreRebalancingService:
         self, sold_on: date, quantity: Decimal, price: Decimal, symbol: str = "BRK.B"
     ) -> dict:
         symbol = symbol.upper()
-        if symbol not in {"BRK.B", "VOO"}:
-            raise ValueError("核心仓再平衡标的只允许 BRK.B 或 VOO")
+        if symbol not in {"BRK.B", "VOO", "SCHD"}:
+            raise ValueError("核心仓再平衡标的只允许 BRK.B、VOO 或 SCHD")
         quantity = quantity.quantize(SHARE)
         if quantity <= ZERO or price <= ZERO:
             raise ValueError("卖出股数和价格必须大于零")

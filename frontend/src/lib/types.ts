@@ -28,6 +28,7 @@ export interface CapitalSnapshot {
   wheel: StrategyCapital
   leaps: StrategyCapital
   options?: StrategyCapital
+  pmcc?: PMCCSnapshot
   cash: CashCapital
 }
 
@@ -130,6 +131,7 @@ export interface MarketSnapshot {
     tqqq: { price: number }
     brk_b: { price: number }
     voo?: { price: number }
+    schd?: { price: number }
     vix: { price: number }
   }
   wheel: {
@@ -160,6 +162,7 @@ export interface MarketSnapshot {
     available: number
     over: number
   }
+  pmcc?: PMCCSnapshot
   leaps_club?: {
     decisions: ClubEntryDecision[]
     unavailable: Array<{ symbol: string; name: string; error: string }>
@@ -188,7 +191,7 @@ export interface EquityQuote {
 }
 
 export interface CoreAssetDecision {
-  symbol: 'BRK.B' | 'VOO'
+  symbol: 'BRK.B' | 'VOO' | 'SCHD'
   current_value: number
   price: number
   rsi14: number
@@ -225,19 +228,20 @@ export interface CoreStrategyDecision {
     direct_buy_reserve: number
     contracts: number
     dte_range: [number, number]
+    strike_cap?: number | null
   }
   full_threshold: number
   ratio_z: number
   route_confirmation_days: number
   rotation_confirmation_days: number
-  selected_symbol: 'BRK.B' | 'VOO' | null
+  selected_symbol: 'BRK.B' | 'VOO' | 'SCHD' | null
   daily_limit_open: boolean
   recommendation: (CoreAssetDecision & { cash_required: number }) | null
   rotation: {
     code: string
     actionable: boolean
-    sell_symbol: 'BRK.B' | 'VOO' | null
-    buy_symbol: 'BRK.B' | 'VOO' | null
+    sell_symbol: 'BRK.B' | 'VOO' | 'SCHD' | null
+    buy_symbol: 'BRK.B' | 'VOO' | 'SCHD' | null
     amount: number
     sell_shares: number
     buy_shares: number
@@ -249,9 +253,12 @@ export interface CoreStrategyDecision {
     band?: string | null
     confirmation_days?: number
     current_brk_weight?: number
+    current_schd_weight?: number
     projected_brk_weight?: number
+    projected_schd_weight?: number
     target_brk_weight?: number
     next_brk_weight?: number
+    next_schd_weight?: number
     weight_change?: number
     used_weight?: number
     remaining_weight?: number
@@ -264,7 +271,7 @@ export interface CoreStrategyDecision {
 
 export interface OtherHolding {
   id: number
-  category: 'cash_equivalent' | 'other' | 'leaps_call_wheel'
+  category: 'cash_equivalent' | 'other' | 'leaps_call_wheel' | 'pmcc'
   symbol: string
   asset_type: 'equity' | 'option'
   direction: 'long' | 'short'
@@ -288,6 +295,7 @@ export interface OtherHolding {
   quote_status: 'updated' | 'stale' | 'unavailable'
   last_error: string | null
   linked_position_id?: number | null
+  pmcc_state?: PMCCState | null
 }
 
 export interface OtherHoldingListing {
@@ -297,6 +305,81 @@ export interface OtherHoldingListing {
   other_value: number
   unpriced_count: number
   leaps_call_wheels?: OtherHolding[]
+  pmcc?: PMCCSnapshot
+}
+
+export interface PMCCBudget {
+  total_equity: number
+  total_target: number
+  qqq_target: number
+  individual_target: number
+  individual_symbol_cap: number
+  qqq_slot_target: number
+  individual_slot_target: number
+}
+
+export interface PMCCState {
+  symbol: string
+  long_position_id: number | null
+  short_call_ids: number[]
+  status: 'covered' | 'uncovered' | 'expired' | 'needs_roll' | 'assignment_risk'
+  reason: string
+  long_quantity: number
+  short_quantity: number
+  covered_contracts: number
+  coverage_ratio: number
+  long_debit: number
+  short_premium_received: number
+  short_buyback_cost: number
+  short_call_pnl: number
+  net_cash_flow: number
+  net_debit: number
+  maximum_loss: number
+  long_current_value: number
+  short_current_value: number
+  current_exposure: number
+  long_expiration: string | null
+  short_expiration: string | null
+  long_dte: number | null
+  short_dte: number | null
+  short_strike: number | null
+  underlying_price: number | null
+  assignment_risk: boolean
+  needs_roll: boolean
+}
+
+export interface PMCCSnapshot {
+  budget: PMCCBudget
+  qqq: PMCCTotals & { target: number; available: number; over: number }
+  individual: PMCCTotals & { target: number; available: number; over: number; symbols: Record<string, PMCCSymbolBudget> }
+  total: PMCCTotals & { target: number; available: number; over: number }
+  uncovered_count: number
+  assignment_risk_count: number
+  needs_roll_count: number
+  realized_profit: number
+  closed_short_call_count: number
+  short_call_realized_by_symbol: Record<string, number>
+  states: PMCCState[]
+  entry?: {
+    qqq: { eligible: boolean; checks: Record<string, boolean>; available_contracts: number; message: string }
+    individual: { eligible_symbols: string[]; checks_reused: boolean; message: string }
+  }
+}
+
+export interface PMCCTotals {
+  committed: number
+  maximum_loss: number
+  net_cash_flow: number
+  current_exposure: number
+  states: number
+}
+
+export interface PMCCSymbolBudget {
+  symbol: string
+  committed: number
+  maximum_loss: number
+  states: number
+  over_cap: boolean
 }
 
 export interface WheelCycle {
@@ -487,14 +570,14 @@ export interface RebalancingSnapshot {
     unrealized: Record<'core' | 'wheel' | 'leaps', number>
   }
   core_price: number
-  core_symbol: 'BRK.B' | 'VOO'
+  core_symbol: 'BRK.B' | 'VOO' | 'SCHD'
   core_decision: {
     code: 'underweight' | 'pause' | 'observe' | 'sell'
     actionable: boolean
     target_after_sale: number
     sell_amount: number
     estimated_shares: number
-    symbol: 'BRK.B' | 'VOO'
+    symbol: 'BRK.B' | 'VOO' | 'SCHD'
   }
   recommendations: Array<{
     priority: number

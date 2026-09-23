@@ -16,7 +16,7 @@ truth for positions and transactions.
 - BOXX recognition as a cash equivalent and separate unmanaged-position views.
 - TQQQ and trillion-club Wheel monitoring, including rolls and realized P/L.
 - QQQ/QLD and trillion-club LEAPS monitoring, including FIFO roll history.
-- Core BRK.B/VOO accumulation signals and periodic account rebalancing prompts.
+- Core BRK.B/VOO/SCHD accumulation signals, capped acquisition Puts, and periodic account rebalancing prompts.
 - Manually triggered Yahoo market refreshes for daily indicators and quotes.
 - Local-only SQLite persistence with no cloud synchronization.
 
@@ -75,10 +75,10 @@ Use `make dev` to start both services without opening a browser.
    update current values.
 6. Use the refresh button when updated public market indicators are needed.
 
-The allocation formula is configurable in code and currently assigns core
-equity to `min(age + 20, 80)%`, cash to `5%`, LEAPS to `25%`, and the remaining
-capacity to Wheel. Wheel and LEAPS share the options capital pool for exposure
-and Margin warnings while retaining separate operational views.
+The allocation formula is configurable in code and currently assigns `70%` to
+core equity, `5%` to cash, and `25%` to the shared options pool. Wheel and LEAPS
+retain separate operational views, but new option capacity is reserved for the
+LEAPS/PMCC transition; existing Wheel positions are not automatically closed.
 
 ## Testing
 

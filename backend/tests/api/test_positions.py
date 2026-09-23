@@ -413,14 +413,14 @@ def test_core_purchase_automatically_funds_only_the_core_shortfall_from_cash() -
     assert first.status_code == 201
     assert second.status_code == 201
     summary = client.get("/api/portfolio/summary").json()
-    assert summary["balances"]["core"] == 51000.0
-    assert summary["balances"]["cash"] == 4000.0
+    assert summary["balances"]["core"] == 70000.0
+    assert summary["balances"]["cash"] == 5000.0
     funding_events = [
         event
         for event in client.get("/api/ledger/events").json()
         if event["event_type"] == "core_auto_funding"
     ]
-    assert [event["amount"] for event in funding_events] == [1000.0, -1000.0]
+    assert funding_events == []
     app.dependency_overrides.clear()
 
 
@@ -444,7 +444,7 @@ def test_core_purchase_is_atomic_when_available_cash_cannot_cover_shortfall() ->
             "bucket": "core",
             "symbol": "BRK.B",
             "asset_type": "equity",
-            "quantity": 30,
+            "quantity": 60,
             "entry_price": 500,
             "opened_on": "2026-07-20",
         },
@@ -454,6 +454,6 @@ def test_core_purchase_is_atomic_when_available_cash_cannot_cover_shortfall() ->
     assert "可用现金不足" in rejected.text
     assert len(client.get("/api/positions").json()) == 1
     summary = client.get("/api/portfolio/summary").json()
-    assert summary["balances"]["core"] == 50000.0
+    assert summary["balances"]["core"] == 70000.0
     assert summary["balances"]["cash"] == 5000.0
     app.dependency_overrides.clear()

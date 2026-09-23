@@ -63,6 +63,8 @@
 
 .core-rotation { min-height: 104px; border: 1px solid var(--line); border-left: 5px solid #a7b0ac; background: #f5f6f5; display: grid; grid-template-columns: minmax(280px, 1.35fr) repeat(3, minmax(175px, 1fr)); }
 .core-rotation.actionable { border-left-color: var(--amber); background: #fff8e9; }
+.core-rotation.secondary { border-left-color: #a7b0ac; }
+.core-rotation.secondary.actionable { border-left-color: #8e9b96; background: #f5f6f5; }
 .core-rotation > header, .core-rotation > div { min-width: 0; padding: 14px 16px; border-right: 1px solid var(--line); display: grid; align-content: center; gap: 4px; }
 .core-rotation > header { grid-template-columns: 24px 1fr; }
 .core-rotation > header svg { color: var(--amber); }

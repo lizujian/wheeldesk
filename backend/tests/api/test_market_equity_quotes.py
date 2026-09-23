@@ -22,7 +22,7 @@ class EquityProvider:
     def daily_bars(self, symbol: str, limit: int = 300) -> MarketSeries:
         if symbol in self.fail_symbols:
             raise MarketDataError(f"{symbol} unavailable")
-        prices = {"QQQ": "500", "TQQQ": "80", "BRK.B": "510", "VOO": "600", "VIX": "18", "AAPL": "220", "QLD": "90"}
+        prices = {"QQQ": "500", "TQQQ": "80", "BRK.B": "510", "VOO": "600", "SCHD": "33", "VIX": "18", "AAPL": "220", "QLD": "90"}
         close = Decimal(prices[symbol])
         start = date(2025, 9, 26)
         bars = [

@@ -1,6 +1,6 @@
 from datetime import date, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.db_models import SignalRecord
@@ -8,6 +8,8 @@ from app.domain.core import CoreAssetDecision, CorePutDecision, TIER_RANK
 from app.domain.core_rotation import CoreRotationDecision
 
 SEVERITY_ORDER = {"critical": 0, "warning": 1, "opportunity": 2, "info": 3}
+WHEEL_SIGNAL_CODES = ("sell_put_opportunity",)
+WHEEL_SIGNAL_PREFIXES = ("trillion_club_wheel_",)
 
 
 class SignalService:
@@ -100,12 +102,12 @@ class SignalService:
             record.acknowledged = True
         self.session.commit()
         return self.emit(
-            code, f"核心仓轮动：{decision.sell_symbol} → {decision.buy_symbol}",
-            f"收盘比率 {decision.ratio:.4f}；BRK.B 当前 {decision.current_brk_weight:.1%}，"
+            code, f"核心仓轮动观察：{decision.sell_symbol} → {decision.buy_symbol}",
+            f"二级观察，不作为主要买入信号。收盘比率 {decision.ratio:.4f}；BRK.B 当前 {decision.current_brk_weight:.1%}，"
             f"档位目标 {decision.target_brk_weight:.1%}，本次调整至 {decision.next_brk_weight:.1%}。"
             f"建议等额轮动 {decision.amount}，幅度 {decision.weight_change:.1%}；"
-            f"近 20 交易日已使用 {decision.used_weight:.1%}。仅为建议，成交以 IBKR 报表为准。",
-            "opportunity", decision.ratio_as_of or market_date,
+            f"近 20 交易日已使用 {decision.used_weight:.1%}。仅为低频观察建议，成交以 IBKR 报表为准。",
+            "info", decision.ratio_as_of or market_date,
         )
 
     def emit(
@@ -151,6 +153,22 @@ class SignalService:
         self.session.add(signal)
         self.session.commit()
         return signal
+
+    def retire_wheel_signals(self) -> None:
+        """Archive legacy Wheel signals while keeping their history readable."""
+        predicates = [SignalRecord.code.in_(WHEEL_SIGNAL_CODES)]
+        predicates.extend(
+            SignalRecord.code.like(f"{prefix}%")
+            for prefix in WHEEL_SIGNAL_PREFIXES
+        )
+        records = list(self.session.scalars(select(SignalRecord).where(or_(*predicates))))
+        changed = False
+        for record in records:
+            if not record.acknowledged:
+                record.acknowledged = True
+                changed = True
+        if changed:
+            self.session.commit()
 
     def list_active(self) -> list[SignalRecord]:
         return self.list_recent(include_acknowledged=False)

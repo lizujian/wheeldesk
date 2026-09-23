@@ -18,12 +18,17 @@ Trades,Data,Order,Stocks,USD,VOO,"2026-09-04, 10:01:00",16,500,O
 Open Positions,Header,DataDiscriminator,Asset Category,Currency,Symbol,Quantity,Mult,Cost Price,Close Price
 Open Positions,Data,Summary,Stocks,USD,BRK B,80,1,390,400
 Open Positions,Data,Summary,Stocks,USD,VOO,16,1,500,500
+Open Positions,Data,Summary,Stocks,USD,SCHD,0,1,33,33
 '''
 
 
 def prices(end=date(2026, 9, 4)):
     days = [end - timedelta(days=offset) for offset in range(50) if (end - timedelta(days=offset)).weekday() < 5]
-    return {"BRK.B": {day: D("400") for day in days}, "VOO": {day: D("500") for day in days}}
+    return {
+        "BRK.B": {day: D("400") for day in days},
+        "VOO": {day: D("500") for day in days},
+        "SCHD": {day: D("33") for day in days},
+    }
 
 
 def test_daily_and_range_reimports_count_actual_sell_once_not_both_legs():
@@ -36,7 +41,7 @@ def test_daily_and_range_reimports_count_actual_sell_once_not_both_legs():
         rows = list(session.scalars(select(CoreTradeRecord)))
         assert len(rows) == 2
         sale = next(row for row in rows if row.quantity < 0)
-        assert sale.pre_quantities == {"BRK.B": "100", "VOO": "0"}
+        assert sale.pre_quantities == {"BRK.B": "100", "VOO": "0", "SCHD": "0"}
         usage, executions = CoreRotationService(session).usage(prices())
         assert usage.complete
         assert usage.used_weight == D(".20")

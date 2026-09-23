@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 
-import type { OtherHoldingListing } from '../lib/types'
+import type { OtherHoldingListing, WheelOverview } from '../lib/types'
 import { OtherHoldingsPage } from './OtherHoldingsPage'
 
 const listing: OtherHoldingListing = {
@@ -29,6 +29,20 @@ const listing: OtherHoldingListing = {
       unrealized_profit: null, opened_on: '2026-02-01', expiration: null, strike: null, status: 'closed', closed_on: '2026-07-01',
       exit_price: 420, realized_profit: 100, quote_source: 'ibkr_statement', quote_as_of: '2026-07-01', quote_status: 'updated', last_error: null,
     },
+    {
+      id: 5, category: 'other', symbol: 'AVGO', asset_type: 'option', direction: 'short', option_type: 'call',
+      quantity: 1, multiplier: 100, entry_price: 5.05, current_price: 5.25, current_value: -525, absolute_value: 525,
+      unrealized_profit: -20, opened_on: '2026-09-22', expiration: '2026-10-23', strike: 400, status: 'open', closed_on: null,
+      exit_price: null, realized_profit: null, quote_source: 'ibkr_statement', quote_as_of: '2026-09-22', quote_status: 'updated', last_error: null,
+      linked_position_id: null,
+    },
+    {
+      id: 6, category: 'other', symbol: 'AVGO', asset_type: 'option', direction: 'short', option_type: 'call',
+      quantity: 1, multiplier: 100, entry_price: 4.5, current_price: null, current_value: null, absolute_value: 450,
+      unrealized_profit: null, opened_on: '2026-08-01', expiration: '2026-09-18', strike: 390, status: 'closed', closed_on: '2026-09-12',
+      exit_price: 1.2, realized_profit: 330, quote_source: 'ibkr_statement', quote_as_of: '2026-09-12', quote_status: 'updated', last_error: null,
+      linked_position_id: 7,
+    },
   ],
   leaps_call_wheels: [
     {
@@ -39,6 +53,17 @@ const listing: OtherHoldingListing = {
       linked_position_id: 7,
     },
   ],
+}
+
+const wheel: WheelOverview = {
+  budget: {
+    budget: 25000, target_fraction: 0.25, funded: 25000, funding_gap: 0,
+    funding_excess: 0, unfunded_exposure: 0, exposure: 0, available: 25000,
+    over_budget: 0, usage_fraction: 0,
+  },
+  recommendations: { first: 0, second: 0 },
+  realized_profit: 0,
+  rounds: [],
 }
 
 describe('other holdings page', () => {
@@ -60,6 +85,21 @@ describe('other holdings page', () => {
 
     await user.click(screen.getByRole('button', { name: /退出记录/ }))
     expect(screen.getByRole('row', { name: 'MSFT' })).toBeInTheDocument()
+    expect(screen.queryByRole('row', { name: /AVGO/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /删除/ })).not.toBeInTheDocument()
+  })
+
+  it('merges the Wheel transition book without showing Wheel entry signals', () => {
+    render(<OtherHoldingsPage listing={listing} wheel={wheel} pmccSymbols={['AVGO']} />)
+
+    expect(screen.getByRole('heading', { name: '其他持仓与过渡仓' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Wheel 过渡仓' })).toBeInTheDocument()
+    expect(screen.getByText('不生成新的 Wheel 开仓信号')).toBeInTheDocument()
+    expect(screen.queryByRole('article', { name: 'GOOG Sell Call #4' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('article', { name: 'AVGO Sell Call #5' })).not.toBeInTheDocument()
+    expect(screen.queryAllByText('权利金总额')).toHaveLength(0)
+    expect(screen.queryByText('PMCC Short Call')).not.toBeInTheDocument()
+    expect(screen.queryByRole('row', { name: /AVGO/ })).not.toBeInTheDocument()
+    expect(screen.queryByText('Sell Put 开仓条件')).not.toBeInTheDocument()
   })
 })

@@ -95,8 +95,18 @@ def evaluate_club_entries(
     as_of: date,
     confirmed_entry_dates: list[date],
     slot_target: Decimal | None = None,
+    symbol_commitments: dict[str, Decimal] | None = None,
+    symbol_cap: Decimal | None = None,
+    individual_current: Decimal | None = None,
+    individual_target: Decimal | None = None,
 ) -> list[ClubEntryDecision]:
-    capacity = max(shared_target - shared_current, ZERO)
+    pool_capacity = max(shared_target - shared_current, ZERO)
+    individual_capacity = max(
+        (individual_target if individual_target is not None else shared_target)
+        - (individual_current if individual_current is not None else shared_current),
+        ZERO,
+    )
+    capacity = min(pool_capacity, individual_capacity)
     weekly_limit = not any(_same_market_week(entry_date, as_of) for entry_date in confirmed_entry_dates)
     decisions: list[ClubEntryDecision] = []
     for market in markets:
@@ -131,13 +141,25 @@ def evaluate_club_entries(
             "second_entry": _second_entry_ready(market, symbol_positions),
         }
         technical_eligible = all(checks.values())
-        eligible = technical_eligible and capacity > ZERO and bool(available_slots)
+        symbol_current = (symbol_commitments or {}).get(market.symbol, ZERO)
+        symbol_capacity = (
+            max(symbol_cap - symbol_current, ZERO)
+            if symbol_cap is not None
+            else capacity
+        )
+        eligible = (
+            technical_eligible
+            and capacity > ZERO
+            and symbol_capacity > ZERO
+            and bool(available_slots)
+        )
         suggested_amount = (
             min(
                 slot_target
                 if slot_target is not None
-                else shared_target * LEAPS_SLOT_FRACTION,
+                else shared_target * Decimal("0.10"),
                 capacity,
+                symbol_capacity,
             ).quantize(Decimal("0.01"))
             if eligible
             else ZERO
@@ -150,7 +172,8 @@ def evaluate_club_entries(
                 eligible=eligible,
                 suggested_slot=available_slots[0] if available_slots else None,
                 suggested_amount=suggested_amount,
-                over_shared_budget=technical_eligible and capacity <= ZERO,
+                over_shared_budget=technical_eligible
+                and (pool_capacity <= ZERO or individual_capacity <= ZERO or symbol_capacity <= ZERO),
                 checks=checks,
                 current_price=market.current_price,
                 previous_close=market.previous_close,

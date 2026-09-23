@@ -275,9 +275,9 @@ class RebalancingService:
         if total > ZERO and option_gap / total >= MATERIAL_GAP:
             add(
                 "replenish_options",
-                Bucket.WHEEL,
+                Bucket.LEAPS,
                 option_gap,
-                "期权策略共享池低于目标至少 2 个百分点，建议在现金安全后补足。",
+                "期权策略共享池低于目标至少 2 个百分点，建议在现金安全后补足 LEAPS/PMCC。",
             )
         if core_decision.actionable:
             add(

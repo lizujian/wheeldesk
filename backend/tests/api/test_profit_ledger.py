@@ -128,7 +128,7 @@ def test_allocation_requires_available_profit_and_records_details() -> None:
     assert allocation["allocations"] == {"core": 700.0, "cash": 500.0}
     balances = client.get("/api/portfolio/summary").json()["balances"]
     assert balances["cash"] == 6300.0
-    assert balances["core"] == 56700.0
+    assert balances["core"] == 70700.0
     app.dependency_overrides.clear()
 
 

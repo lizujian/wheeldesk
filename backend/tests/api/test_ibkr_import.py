@@ -217,6 +217,23 @@ Open Positions,Data,Summary,Stocks,USD,VOO,,12.5,1,590,7375,600,7500,125,,,,
         assert position["bucket"] == "core"
 
 
+def test_ibkr_import_classifies_schd_as_core_equity() -> None:
+    report = '''Statement,Header,Field Name,Field Value
+Statement,Data,Period,"August 28, 2026"
+Open Positions,Header,DataDiscriminator,Asset Category,Currency,Symbol,Underlying Symbol,Quantity,Mult,Cost Price,Cost Basis,Close Price,Value,Unrealized P/L,Expiry,Strike,Put/Call,Code
+Open Positions,Data,Summary,Stocks,USD,SCHD,,10,1,32,320,33,330,10,,,,
+'''
+    with import_client() as client:
+        preview = client.post(
+            "/api/imports/ibkr/preview",
+            json={"filename": "schd.csv", "content": report},
+        ).json()
+
+        schd = next(row for row in preview["rows"] if row["instrument"] == "SCHD")
+        assert schd["action"] == "create_position"
+        assert schd["details"]["bucket"] == "core"
+
+
 def test_ibkr_import_classifies_brk_puts_as_core_accumulation() -> None:
     from app.api.market import get_market_provider, get_option_provider
     from app.market.base import MarketDataError
@@ -266,10 +283,10 @@ Open Positions,Data,Summary,Equity and Index Options,USD,BRK B 02OCT26 500 P,-1,
 
         portfolio = client.get("/api/portfolio/summary").json()
         assert portfolio["capital"]["core"]["committed"] == 100000.0
-        assert portfolio["capital"]["core"]["cash_occupancy"] == 44000.0
+        assert portfolio["capital"]["core"]["cash_occupancy"] == 30000.0
         assert portfolio["capital"]["wheel"]["committed"] == 0.0
-        assert portfolio["capital"]["cash"]["occupied"] == 44000.0
-        assert portfolio["capital"]["cash"]["margin_shortfall"] == 39000.0
+        assert portfolio["capital"]["cash"]["occupied"] == 30000.0
+        assert portfolio["capital"]["cash"]["margin_shortfall"] == 25000.0
 
         provider = CoreProvider()
         app.dependency_overrides[get_market_provider] = lambda: provider
@@ -342,7 +359,7 @@ Trades,Data,Order,Equity and Index Options,USD,GOOG 02OCT26 360 C,"2026-09-15, 1
         ).json()
         short_call = next(row for row in preview["rows"] if row["action"] == "create_leaps_call")
         assert short_call["details"]["linked_position_id"] is not None
-        assert "LEAPS Sell Call 轮动" in short_call["message"]
+        assert "PMCC Short Call" in short_call["message"]
 
         imported = client.post(
             "/api/imports/ibkr/auto",
@@ -392,7 +409,7 @@ Open Positions,Data,Summary,Equity and Index Options,USD,QLD 18SEP26 90 C,-1,100
         ).json()
         call = next(row for row in preview["rows"] if row["action"] == "create_leaps_call")
         assert call["details"]["linked_position_id"] is not None
-        assert "LEAPS Sell Call 轮动" in call["message"]
+        assert "PMCC Short Call" in call["message"]
 
         imported = client.post(
             "/api/imports/ibkr/auto",

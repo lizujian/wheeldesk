@@ -120,7 +120,7 @@ export function WheelHistoryPage({ overview }: { overview: WheelOverview }) {
   </div>
 }
 
-function BudgetBand({ overview }: { overview: WheelOverview }) {
+export function BudgetBand({ overview }: { overview: WheelOverview }) {
   const capital = overview.capital ?? {
     assigned: overview.budget.funded,
     put_collateral: overview.budget.exposure,
@@ -132,7 +132,7 @@ function BudgetBand({ overview }: { overview: WheelOverview }) {
     margin_shortfall: 0,
   }
   const over = capital.cash_occupancy > 0
-  const margin = capital.margin_shortfall > 0
+  const cashGap = capital.margin_shortfall > 0
   const targetOver = Math.max(capital.committed - overview.budget.budget, 0)
   const rows = [
     { label: '期权共享目标', value: overview.budget.budget, icon: <Target size={18} />, note: `总资产 ${(overview.budget.target_fraction * 100).toFixed(1)}%` },
@@ -142,18 +142,18 @@ function BudgetBand({ overview }: { overview: WheelOverview }) {
     { label: '共享总占用', value: capital.committed, icon: <Gauge size={18} />, note: '含车轮与 LEAPS 成本' },
     { label: '超过共享目标', value: targetOver, icon: <AlertTriangle size={18} />, note: targetOver > 0 ? '缩减期不建议新增仓位' : '共享目标范围内' },
     { label: '临时占用现金', value: capital.cash_occupancy, icon: <Banknote size={18} />, note: over ? '超过期权共享本金' : '未占用现金' },
-    { label: 'Margin 缺口', value: capital.margin_shortfall, icon: margin ? <AlertTriangle size={18} /> : <Check size={18} />, note: margin ? '需优先补足现金' : `可用现金 ${formatMoney(capital.cash_available)}` },
+    { label: '账户现金覆盖缺口', value: capital.margin_shortfall, icon: cashGap ? <AlertTriangle size={18} /> : <Check size={18} />, note: cashGap ? '核心仓与期权占用合计超过流动现金' : `可用现金 ${formatMoney(capital.cash_available)}` },
   ]
   return <>
-    <section className={`wheel-budget ${over || margin || targetOver ? 'over-budget' : ''}`} aria-label="车轮预算">
-      {rows.map((row) => <div key={row.label} className={(row.label === '超过共享目标' && targetOver > 0) || (row.label === '临时占用现金' && over) || (row.label === 'Margin 缺口' && margin) ? 'danger' : ''}>
+    <section className={`wheel-budget ${over || cashGap || targetOver ? 'over-budget' : ''}`} aria-label="车轮预算">
+      {rows.map((row) => <div key={row.label} className={(row.label === '超过共享目标' && targetOver > 0) || (row.label === '临时占用现金' && over) || (row.label === '账户现金覆盖缺口' && cashGap) ? 'danger' : ''}>
         {row.icon}<span>{row.label}</span><strong>{formatMoney(row.value)}</strong>{row.note && <small>{row.note}</small>}
       </div>)}
     </section>
-    {(over || margin || targetOver > 0) && <div className="wheel-budget-alert" role="alert" aria-label="车轮资金风险"><AlertTriangle size={17} /><span>
+    {(over || cashGap || targetOver > 0) && <div className="wheel-budget-alert" role="alert" aria-label="车轮资金风险"><AlertTriangle size={17} /><span>
       {targetOver > 0 && <>车轮与 LEAPS 合计占用超过共享目标 {formatMoney(targetOver)}，进入策略缩减期。</>}
       {over && <>期权共享池临时占用现金 {formatMoney(capital.cash_occupancy)}。</>}
-      {margin && <>Margin 缺口 {formatMoney(capital.margin_shortfall)}，请优先补足。</>}
+      {cashGap && <>账户现金覆盖缺口 {formatMoney(capital.margin_shortfall)}，请优先补足。</>}
     </span></div>}
   </>
 }
@@ -233,7 +233,7 @@ function ClubWheelDesk({ market }: { market: MarketSnapshot | null }) {
   </div>
 }
 
-function PutLot({ put, roundNumber }: { put: WheelPutLot; roundNumber: number }) {
+export function PutLot({ put, roundNumber }: { put: WheelPutLot; roundNumber: number }) {
   return <article className={`wheel-lot ${put.state}`}>
     <header>
       <div><span>第 {roundNumber} 轮 · {put.symbol === 'TQQQ' ? put.batch_number === 1 ? '第一批' : '第二批' : '独立个股周期'}</span><h3><b className="lot-symbol">{put.symbol}</b> Sell Put #{put.id}</h3></div>
@@ -317,7 +317,7 @@ function CallLot({ call }: { call: WheelCallLot }) {
   </div>
 }
 
-function putHasLiveExposure(put: WheelPutLot) {
+export function putHasLiveExposure(put: WheelPutLot) {
   return (put.state === 'open' && put.open_quantity > 0)
     || put.share_lots.some((share) => share.state === 'held' && share.remaining_quantity > 0)
     || put.share_lots.some((share) => share.calls.some((call) => call.state === 'open'))

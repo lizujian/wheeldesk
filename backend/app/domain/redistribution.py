@@ -47,9 +47,9 @@ def recommend_distribution(
     option_gap = max(option_target - option_current, ZERO)
     option_budget = min(remaining, option_gap)
     if option_budget > ZERO:
-        # Wheel is the storage bucket for newly allocated shared option principal;
-        # both Wheel and LEAPS consume the combined balance.
-        allocations[Bucket.WHEEL] = option_budget.quantize(CENT)
+        # Route new option principal to LEAPS/PMCC while existing Wheel lots
+        # remain separately tracked and can be managed to completion.
+        allocations[Bucket.LEAPS] = option_budget.quantize(CENT)
         remaining -= option_budget
 
     return DistributionRecommendation(

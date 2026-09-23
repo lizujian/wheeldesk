@@ -9,10 +9,10 @@ ZERO = Decimal("0")
 class RotationRules:
     min_brk_weight: Decimal = Decimal("0.30")
     max_brk_weight: Decimal = Decimal("1.00")
-    confirmation_sessions: int = 3
+    confirmation_sessions: int = 5
     window_sessions: int = 20
-    max_turnover: Decimal = Decimal("0.20")
-    tolerance: Decimal = Decimal("0.02")
+    max_turnover: Decimal = Decimal("0.10")
+    tolerance: Decimal = Decimal("0.05")
     sell_bands: tuple = ((Decimal("0.88"), Decimal("0.30")), (Decimal("0.83"), Decimal("0.55")), (Decimal("0.78"), Decimal("0.80")))
     buy_bands: tuple = ((Decimal("0.65"), Decimal("1.00")), (Decimal("0.68"), Decimal("0.85")), (Decimal("0.72"), Decimal("0.70")))
 
@@ -35,9 +35,12 @@ class CoreRotationDecision:
     band: str | None = None
     confirmation_days: int = 0
     current_brk_weight: Decimal = ZERO
+    current_schd_weight: Decimal = ZERO
     projected_brk_weight: Decimal = ZERO
+    projected_schd_weight: Decimal = ZERO
     target_brk_weight: Decimal = ZERO
     next_brk_weight: Decimal = ZERO
+    next_schd_weight: Decimal = ZERO
     weight_change: Decimal = ZERO
     used_weight: Decimal = ZERO
     remaining_weight: Decimal = RULES.max_turnover
@@ -68,23 +71,38 @@ def evaluate_rotation(
     ratios: list[tuple[date, Decimal]],
     pending_brk_shares: Decimal = ZERO,
     pending_voo_shares: Decimal = ZERO,
+    schd_value: Decimal = ZERO,
+    schd_price: Decimal = ZERO,
+    pending_schd_shares: Decimal = ZERO,
     usage: RotationUsage = RotationUsage(),
     data_valid: bool = True,
     daily_limit_open: bool = True,
     rules: RotationRules = RULES,
 ) -> CoreRotationDecision:
-    numbers = (brk_value, voo_value, brk_price, voo_price, pending_brk_shares, pending_voo_shares)
+    numbers = (
+        brk_value, voo_value, brk_price, voo_price, schd_value, schd_price,
+        pending_brk_shares, pending_voo_shares, pending_schd_shares,
+    )
     if any(not number.is_finite() or number < ZERO for number in numbers) or any(
         not ratio.is_finite() or ratio <= ZERO for _, ratio in ratios
     ):
         return CoreRotationDecision(code="invalid_data")
-    total = brk_value + voo_value
+    total = brk_value + voo_value + schd_value
     weight = brk_value / total if total > ZERO else ZERO
+    schd_weight = schd_value / total if total > ZERO else ZERO
     projected_brk = brk_value + pending_brk_shares * brk_price
-    projected_total = total + pending_brk_shares * brk_price + pending_voo_shares * voo_price
+    projected_schd = schd_value + pending_schd_shares * schd_price
+    projected_total = (
+        total
+        + pending_brk_shares * brk_price
+        + pending_voo_shares * voo_price
+        + pending_schd_shares * schd_price
+    )
     decision = CoreRotationDecision(
         current_brk_weight=weight, target_brk_weight=weight, next_brk_weight=weight,
         projected_brk_weight=projected_brk / projected_total if projected_total > ZERO else ZERO,
+        current_schd_weight=schd_weight,
+        projected_schd_weight=projected_schd / projected_total if projected_total > ZERO else ZERO,
         used_weight=usage.used_weight,
         remaining_weight=max(rules.max_turnover - usage.used_weight, ZERO),
         ratio=ratios[-1][1] if ratios else None,
@@ -112,10 +130,24 @@ def evaluate_rotation(
     decision = replace(decision, band=band_code, target_brk_weight=target, confirmation_days=confirmation)
     if delta <= rules.tolerance:
         return replace(decision, code="within_target")
-    decision = replace(decision, sell_symbol=sell_symbol, buy_symbol="VOO" if sell_symbol == "BRK.B" else "BRK.B")
+    sell_symbol, buy_symbol = _select_rotation_legs(
+        sell_symbol=sell_symbol,
+        voo_value=voo_value,
+        voo_price=voo_price,
+        schd_value=schd_value,
+        schd_price=schd_price,
+        pending_voo_shares=pending_voo_shares,
+        pending_schd_shares=pending_schd_shares,
+    )
+    decision = replace(decision, sell_symbol=sell_symbol, buy_symbol=buy_symbol)
     if confirmation < rules.confirmation_sessions:
         return replace(decision, code="confirming")
-    if (sell_symbol == "BRK.B" and pending_brk_shares > ZERO) or (sell_symbol == "VOO" and pending_voo_shares > ZERO):
+    pending_by_symbol = {
+        "BRK.B": pending_brk_shares,
+        "VOO": pending_voo_shares,
+        "SCHD": pending_schd_shares,
+    }
+    if pending_by_symbol.get(sell_symbol, ZERO) > ZERO:
         return replace(decision, code="pending_puts")
     if not usage.complete:
         return replace(decision, code="execution_unverified")
@@ -129,9 +161,51 @@ def evaluate_rotation(
         return replace(decision, code="weight_constraint")
     amount = (total * change).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
     change = amount / total
+    next_schd_weight = schd_weight
+    if buy_symbol == "SCHD":
+        next_schd_weight += change
+    elif sell_symbol == "SCHD":
+        next_schd_weight -= change
+    sell_price = _price_for(sell_symbol, brk_price, voo_price, schd_price)
+    buy_price = _price_for(buy_symbol, brk_price, voo_price, schd_price)
+    if sell_price <= ZERO or buy_price <= ZERO:
+        return replace(decision, code="invalid_data")
     return replace(
         decision, code="opportunity", actionable=amount > ZERO, amount=amount,
         weight_change=change, next_brk_weight=weight - change if sell_symbol == "BRK.B" else weight + change,
-        sell_shares=(amount / (brk_price if sell_symbol == "BRK.B" else voo_price)).quantize(Decimal("0.0001"), rounding=ROUND_DOWN),
-        buy_shares=(amount / (voo_price if sell_symbol == "BRK.B" else brk_price)).quantize(Decimal("0.0001"), rounding=ROUND_DOWN),
+        next_schd_weight=next_schd_weight,
+        sell_shares=(amount / sell_price).quantize(Decimal("0.0001"), rounding=ROUND_DOWN),
+        buy_shares=(amount / buy_price).quantize(Decimal("0.0001"), rounding=ROUND_DOWN),
     )
+
+
+def _select_rotation_legs(
+    *,
+    sell_symbol: str,
+    voo_value: Decimal,
+    voo_price: Decimal,
+    schd_value: Decimal,
+    schd_price: Decimal,
+    pending_voo_shares: Decimal,
+    pending_schd_shares: Decimal,
+) -> tuple[str, str]:
+    candidates = [
+        ("VOO", voo_value, voo_price, pending_voo_shares),
+        ("SCHD", schd_value, schd_price, pending_schd_shares),
+    ]
+    available = [candidate for candidate in candidates if candidate[2] > ZERO and candidate[3] <= ZERO]
+    if not available:
+        available = [candidate for candidate in candidates if candidate[2] > ZERO]
+    if not available:
+        return ("BRK.B", "VOO") if sell_symbol == "BRK.B" else ("VOO", "BRK.B")
+    if sell_symbol == "BRK.B":
+        # When both destinations are equally underweight, prefer SCHD so it
+        # participates without creating a fixed internal target allocation.
+        destination = min(available, key=lambda candidate: (candidate[1], 0 if candidate[0] == "SCHD" else 1))[0]
+        return "BRK.B", destination
+    source = max(available, key=lambda candidate: (candidate[1], 1 if candidate[0] == "VOO" else 0))[0]
+    return source, "BRK.B"
+
+
+def _price_for(symbol: str, brk_price: Decimal, voo_price: Decimal, schd_price: Decimal) -> Decimal:
+    return {"BRK.B": brk_price, "VOO": voo_price, "SCHD": schd_price}.get(symbol, ZERO)

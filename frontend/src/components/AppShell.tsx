@@ -1,17 +1,13 @@
 import {
   Activity,
   BellRing,
-  BookOpen,
   Gauge,
-  HandCoins,
   FileInput,
   Layers3,
   Landmark,
   RefreshCw,
-  Scale,
   Settings,
   Sparkles,
-  Waypoints,
 } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 import type { ReactNode } from 'react'
@@ -21,11 +17,7 @@ import './AppShell.css'
 const destinations = [
   ['/', '总览', Gauge],
   ['/core', '核心仓', Landmark],
-  ['/wheel', '车轮', Waypoints],
   ['/leaps', 'LEAPS', Sparkles],
-  ['/rebalancing', '再平衡', Scale],
-  ['/profit-ledger', '收益', HandCoins],
-  ['/ledger', '账本', BookOpen],
   ['/other-holdings', '其他', Layers3],
   ['/imports/ibkr', '导入', FileInput],
   ['/signals', '信号', Activity],

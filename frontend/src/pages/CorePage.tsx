@@ -4,7 +4,7 @@ import { formatMoney } from '../components/AllocationChart'
 import type { CoreAssetDecision, CoreStrategyDecision, MarketSnapshot, PortfolioSummary, Position, WheelOverview, WheelPutLot } from '../lib/types'
 import './CorePage.css'
 
-const coreSymbols = new Set(['BRK.B', 'VOO'])
+const coreSymbols = new Set(['BRK.B', 'VOO', 'SCHD'])
 
 export function CorePage({ portfolio, market, positions, overview }: {
   portfolio: PortfolioSummary
@@ -32,14 +32,14 @@ export function CorePage({ portfolio, market, positions, overview }: {
   const cashAvailable = portfolio.capital?.cash.available ?? (portfolio.balances?.cash ?? 0)
 
   return <div className="page-stack core-console">
-    <div className="page-heading"><div><p className="eyebrow">BRK.B + VOO CORE EQUITY</p><h1>核心仓相对定投</h1><span>无固定内部比例 · 新增资金路由与满仓轮换</span></div><span>{lots.length} 笔股票 · {corePuts.length} 笔待接股</span></div>
+    <div className="page-heading"><div><p className="eyebrow">BRK.B + VOO + SCHD CORE EQUITY</p><h1>核心仓相对定投</h1><span>SCHD 纳入核心配置 · 轮动仅作低频观察</span></div><span>{lots.length} 笔股票 · {corePuts.length} 笔待接股</span></div>
 
     <section className={`core-budget-band ${overTarget > 0 || unfundedCost > 0 ? 'danger' : ''}`} aria-label="核心仓预算">
       <CoreMetric icon={<WalletCards size={18} />} label="核心仓目标预算" value={target} note={`总资产动态目标 ${(targetFraction * 100).toFixed(1)}%`} />
       <CoreMetric icon={<Landmark size={18} />} label="已分配核心本金" value={coreCapital.assigned} note={fundingGap > 0 ? `距动态目标 ${formatMoney(fundingGap)}` : '本金已达当前目标'} />
       <CoreMetric icon={<CircleDollarSign size={18} />} label="总资金占用" value={coreCapital.committed} note={`股票成本 ${formatMoney(recordedCost)} · Put 担保 ${formatMoney(putCollateral)}`} danger={unfundedCost > 0} />
       <CoreMetric icon={<Banknote size={18} />} label="可用核心本金" value={coreCapital.available} note="新买入优先使用" />
-      <CoreMetric icon={<TrendingUp size={18} />} label="最新估算市值" value={currentValue} note="BRK.B 与 VOO 合计" danger={overTarget > 0} />
+      <CoreMetric icon={<TrendingUp size={18} />} label="最新估算市值" value={currentValue} note="BRK.B、VOO 与 SCHD 合计" danger={overTarget > 0} />
       <CoreMetric icon={<Gauge size={18} />} label="目标剩余容量" value={remaining} note={putCollateral ? `全部接股后约剩 ${formatMoney(Math.max(remaining - putCollateral, 0))}` : market?.core?.mode === 'full' ? '已进入满仓轮换模式' : '按当前市值计算'} />
       <CoreMetric icon={<WalletCards size={18} />} label="可用现金" value={cashAvailable} note="核心本金不足时可转入" />
     </section>
@@ -64,7 +64,7 @@ export function CorePage({ portfolio, market, positions, overview }: {
             <strong className="core-lot-symbol">{position.symbol}</strong><span>第 {number} 笔 · {position.opened_on}</span><span>{position.quantity} 股</span><span>{formatMoney(position.entry_price)}</span><span>{formatMoney(cost)}</span><span>{formatMoney(value)}</span><em className={value - cost >= 0 ? 'positive' : 'negative'}>{formatMoney(value - cost)}</em>
           </div>
         })}
-      </div> : <div className="core-empty"><Gauge size={22} /><p>IBKR 报表中暂无 BRK.B 或 VOO 持仓</p></div>}
+      </div> : <div className="core-empty"><Gauge size={22} /><p>IBKR 报表中暂无 BRK.B、VOO 或 SCHD 持仓</p></div>}
     </section>
   </div>
 }
@@ -85,7 +85,7 @@ function CorePutRegister({ puts, market }: { puts: WheelPutLot[]; market: Market
 
 function CorePutRow({ put, index, market }: { put: WheelPutLot; index: number; market: MarketSnapshot | null }) {
   const spot = market?.core?.assets?.find((asset) => asset.symbol === put.symbol)?.price
-    ?? (put.symbol === 'BRK.B' ? market?.market.brk_b.price : market?.market.voo?.price)
+    ?? (put.symbol === 'BRK.B' ? market?.market.brk_b.price : put.symbol === 'SCHD' ? market?.market.schd?.price : market?.market.voo?.price)
   const effectiveCost = put.strike - put.premium
   const premiumIncome = put.premium * 100 * put.open_quantity
   const dte = daysBetween(market?.as_of ?? put.trade_date, put.expiration)
@@ -105,10 +105,10 @@ function CorePutRow({ put, index, market }: { put: WheelPutLot; index: number; m
 function CoreRelativeBoard({ decision }: { decision: CoreStrategyDecision | null }) {
   const assets = decision?.assets ?? []
   return <section className="core-relative-board" aria-label="核心仓相对状态">
-    <header><div><p>RELATIVE ROUTING</p><h2>BRK.B / VOO 相对状态</h2></div><span>{decision ? `Z ${formatSigned(decision.ratio_z, 2)} · 路由确认 ${decision.route_confirmation_days} 日` : '等待刷新行情'}</span></header>
+    <header><div><p>CORE ROUTING</p><h2>核心资产相对状态</h2></div><span>{decision ? `Z ${formatSigned(decision.ratio_z, 2)} · BRK.B / VOO 路由确认 ${decision.route_confirmation_days} 日` : '等待刷新行情'}</span></header>
     <div className="core-asset-head" aria-hidden="true"><span>标的 / 当前市值</span><span>价格趋势</span><span>日跌 / 回撤 / RSI</span><span>相对表现</span><span>当前档位</span></div>
     {assets.map((asset) => <CoreAssetRow asset={asset} selected={decision?.selected_symbol === asset.symbol} totalValue={decision?.total_value ?? 0} key={asset.symbol} />)}
-    {!assets.length && <div className="core-relative-empty"><BarChart3 size={19} />刷新行情后计算两只标的的相对偏离</div>}
+    {!assets.length && <div className="core-relative-empty"><BarChart3 size={19} />刷新行情后计算核心资产状态</div>}
   </section>
 }
 
@@ -148,26 +148,27 @@ function CorePutSignal({ decision }: { decision: CoreStrategyDecision | null }) 
   return <section className={`core-signal ${put.actionable ? 'actionable' : 'waiting'}`} aria-label="核心仓 Sell Put 建议">
     <ShieldCheck size={20} />
     <div><span>Sell Put 建仓{put.symbol ? ` · ${put.symbol}` : ''}</span><strong>{labels[put.code] ?? '等待'}</strong><small>7～21 天 · 每次 1 张 · 接股后归核心仓</small></div>
-    {put.reference_strike != null && <div><span>行权价上限参考</span><strong>{formatMoney(put.reference_strike)}</strong><small>按实际挂牌行权价向下选择</small></div>}
+    {put.reference_strike != null && <div><span>参考行权价</span><strong>{formatMoney(put.reference_strike)}</strong><small>{put.strike_cap != null ? `策略上限 ${formatMoney(put.strike_cap)} · ` : ''}按实际挂牌行权价向下选择</small></div>}
     <div><span>{put.reference_strike != null ? '参考接股资金' : '直接买股资金预留'}</span><strong>{formatMoney(put.reference_strike != null ? put.collateral : put.direct_buy_reserve)}</strong><small>{put.reference_strike != null ? `保留直接买股资金至少 ${formatMoney(put.direct_buy_reserve)}` : '可用策略资金的 50%'}</small></div>
   </section>
 }
 
 function CoreRotationSignal({ decision }: { decision: CoreStrategyDecision | null }) {
   const rotation = decision?.rotation
-  const labels: Record<string, string> = { waiting: '核心仓未满，暂不轮动', invalid_data: '等待有效的同日收盘行情', neutral: '比率处于保持区间', within_target: '权重已满足当前档位', confirming: '等待连续 3 个交易日确认', pending_puts: '待接股可能抵消轮动，先观察', execution_unverified: '成交前仓位不完整，暂缓轮动', daily_limit: '当日已有核心仓成交', window_limit: '近 20 个交易日额度已用完', weight_constraint: '当前额度无法同时满足权重约束', opportunity: '可评估分批轮动' }
+  const labels: Record<string, string> = { waiting: '核心仓未满，暂不轮动', invalid_data: '等待有效的同日收盘行情', neutral: '比率处于保持区间', within_target: '权重已满足当前档位', confirming: '等待连续 5 个交易日确认', pending_puts: '待接股可能抵消轮动，先观察', execution_unverified: '成交前仓位不完整，暂缓轮动', daily_limit: '当日已有核心仓成交', window_limit: '近 20 个交易日额度已用完', weight_constraint: '当前额度无法同时满足权重约束', opportunity: '低频观察：可评估分批轮动' }
   const weight = (value: number | undefined) => value == null ? '—' : `${(value * 100).toFixed(1)}%`
-  return <section className={`core-rotation ${rotation?.actionable ? 'actionable' : ''}`} aria-label="核心仓满仓轮换建议">
-    <header><ArrowRightLeft size={19} /><div><span>BRK.B / VOO ROTATION</span><strong>{rotation ? labels[rotation.code] ?? '等待行情' : '等待行情'}</strong><small>核心股票市值达到目标的 98% 后启用</small></div></header>
-    <div><span>收盘比率 / 确认</span><strong>{rotation?.ratio?.toFixed(4) ?? '—'} · {rotation?.confirmation_days ?? 0} / 3 日</strong><small>{rotation?.ratio_as_of ?? '等待刷新'} · BRK.B ÷ VOO</small></div>
-    <div><span>BRK.B 当前 / 全部接股后</span><strong>{weight(rotation?.current_brk_weight)} / {weight(rotation?.projected_brk_weight)}</strong><small>权重分母仅为两只核心股票市值</small></div>
-    <div><span>BRK.B 档位目标 / 本次调整后</span><strong>{weight(rotation?.target_brk_weight)} / {weight(rotation?.next_brk_weight)}</strong><small>2 个百分点以内不调整</small></div>
-    <div><span>轮动方向</span><strong>{rotation?.sell_symbol && rotation.buy_symbol ? `${rotation.sell_symbol} → ${rotation.buy_symbol}` : '暂不轮动'}</strong><small>卖出与买入金额等额</small></div>
-    <div><span>建议金额 / 权重变化</span><strong>{formatMoney(rotation?.amount ?? 0)} · {weight(rotation?.weight_change)}</strong><small>每 20 个交易日累计最多 20 个百分点</small></div>
+  return <section className={`core-rotation secondary ${rotation?.actionable ? 'actionable' : ''}`} aria-label="核心仓低频轮动观察">
+    <header><ArrowRightLeft size={19} /><div><span>SECONDARY WATCH · CORE ROTATION</span><strong>{rotation ? labels[rotation.code] ?? '等待行情' : '等待行情'}</strong><small>低频二级观察，不作为主要买入信号</small></div></header>
+    <div><span>收盘比率 / 确认</span><strong>{rotation?.ratio?.toFixed(4) ?? '—'} · {rotation?.confirmation_days ?? 0} / 5 日</strong><small>{rotation?.ratio_as_of ?? '等待刷新'} · BRK.B ÷ VOO</small></div>
+    <div><span>BRK.B 当前 / 全部接股后</span><strong>{weight(rotation?.current_brk_weight)} / {weight(rotation?.projected_brk_weight)}</strong><small>分母包含 BRK.B、VOO 与 SCHD</small></div>
+    <div><span>SCHD 当前 / 本次后</span><strong>{weight(rotation?.current_schd_weight)} / {weight(rotation?.next_schd_weight ?? rotation?.projected_schd_weight)}</strong><small>可作为承接标的，也可在增持 BRK.B 时提供资金</small></div>
+    <div><span>BRK.B 档位目标 / 本次调整后</span><strong>{weight(rotation?.target_brk_weight)} / {weight(rotation?.next_brk_weight)}</strong><small>5 个百分点以内不调整</small></div>
+    <div><span>轮动方向</span><strong>{rotation?.sell_symbol && rotation.buy_symbol ? `${rotation.sell_symbol} → ${rotation.buy_symbol}` : '暂不轮动'}</strong><small>VOO / SCHD 均可参与轮出或承接</small></div>
+    <div><span>建议金额 / 权重变化</span><strong>{formatMoney(rotation?.amount ?? 0)} · {weight(rotation?.weight_change)}</strong><small>每 20 个交易日累计最多 10 个百分点</small></div>
     <div><span>窗口已使用 / 剩余</span><strong>{weight(rotation?.used_weight)} / {weight(rotation?.remaining_weight)}</strong><small>按实际卖出成交统计，不按提醒次数</small></div>
     <div><span>估算双腿</span><strong>{rotation?.actionable ? `卖 ${rotation.sell_shares.toFixed(4)} · 买 ${rotation.buy_shares.toFixed(4)} 股` : '等待触发'}</strong><small>实际成交由 IBKR 报表同步</small></div>
-    <footer><span>比率 ≥ 0.78 / 0.83 / 0.88：BRK.B 目标 80% / 55% / 30%</span><span>比率 ≤ 0.72 / 0.68 / 0.65：BRK.B 目标 70% / 85% / 100%</span><small>0.72～0.78 保持 · 固定档位尚未经过回测验证</small></footer>
-    {!!rotation?.executions?.length && <div className="core-rotation-executions"><strong>近 20 个交易日核心股票卖出</strong><table><thead><tr><th>成交时间</th><th>标的</th><th>卖出股数</th><th>成交价</th><th>成交金额</th><th>额度占用</th></tr></thead><tbody>{rotation.executions.map((trade) => <tr key={trade.id}><td>{trade.traded_at.replace('T', ' ')}</td><td>{trade.symbol}</td><td>{trade.quantity}</td><td>{formatMoney(trade.price)}</td><td>{formatMoney(trade.proceeds)}</td><td>{trade.weight_change == null ? '待核对' : weight(trade.weight_change)}</td></tr>)}</tbody></table><small>额度分母：成交前核心股数；卖出标的按成交价，另一标的按成交日收盘价估算。</small></div>}
+    <footer><span>比率 ≥ 0.78 / 0.83 / 0.88：BRK.B 目标 80% / 55% / 30%</span><span>比率 ≤ 0.72 / 0.68 / 0.65：BRK.B 目标 70% / 85% / 100%</span><small>0.72～0.78 保持 · 连续 5 日确认 · 固定档位尚未经过回测验证</small></footer>
+    {!!rotation?.executions?.length && <div className="core-rotation-executions"><strong>近 20 个交易日核心股票卖出</strong><table><thead><tr><th>成交时间</th><th>标的</th><th>卖出股数</th><th>成交价</th><th>成交金额</th><th>额度占用</th></tr></thead><tbody>{rotation.executions.map((trade) => <tr key={trade.id}><td>{trade.traded_at.replace('T', ' ')}</td><td>{trade.symbol}</td><td>{trade.quantity}</td><td>{formatMoney(trade.price)}</td><td>{formatMoney(trade.proceeds)}</td><td>{trade.weight_change == null ? '待核对' : weight(trade.weight_change)}</td></tr>)}</tbody></table><small>额度分母：成交前三只核心股总市值；卖出标的按成交价，其余标的按成交日收盘价估算。</small></div>}
   </section>
 }
 

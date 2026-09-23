@@ -278,6 +278,31 @@ def test_core_put_routes_mild_pullback_to_one_cash_secured_contract() -> None:
     assert not decision.recommendation.actionable
 
 
+def test_schd_core_put_is_capped_at_thirty_three() -> None:
+    decision = portfolio(
+        [asset("SCHD", price=Decimal("40"), ma200=Decimal("30"), daily_change=Decimal("-0.012"), rsi14=Decimal("48"), support_price=Decimal("35"))],
+        available_funding=Decimal("100000"),
+    )
+
+    assert decision.sell_put.actionable
+    assert decision.sell_put.symbol == "SCHD"
+    assert decision.sell_put.reference_strike == Decimal("33.00")
+    assert decision.sell_put.strike_cap == Decimal("33")
+    assert decision.sell_put.collateral == Decimal("3300.00")
+
+
+def test_brk_core_put_is_capped_at_five_hundred() -> None:
+    decision = portfolio(
+        [asset("BRK.B", price=Decimal("520"), daily_change=Decimal("-0.012"), rsi14=Decimal("48"), support_price=Decimal("510"))],
+        available_funding=Decimal("100000"),
+    )
+
+    assert decision.sell_put.actionable
+    assert decision.sell_put.reference_strike == Decimal("500.00")
+    assert decision.sell_put.strike_cap == Decimal("500")
+    assert decision.sell_put.collateral == Decimal("50000.00")
+
+
 def test_core_put_preserves_direct_buy_reserve_and_target_capacity() -> None:
     candidate = asset("VOO", daily_change=Decimal("-0.012"), rsi14=Decimal("48"), support_price=Decimal("480"))
     short_cash = portfolio([candidate], available_funding=Decimal("60000"))
@@ -319,7 +344,7 @@ def test_full_core_emits_a_cash_neutral_standard_rotation() -> None:
         ratio_z=Decimal("2.2"),
         route_confirmation_days=8,
         rotation_confirmation_days=5,
-        rotation_ratios=[(date(2026, 7, day), Decimal("0.80")) for day in (20, 21, 22)],
+        rotation_ratios=[(date(2026, 7, day), Decimal("0.80")) for day in (20, 21, 22, 23, 24)],
     )
 
     assert decision.mode == "full"
@@ -328,9 +353,9 @@ def test_full_core_emits_a_cash_neutral_standard_rotation() -> None:
     assert decision.rotation.code == "opportunity"
     assert decision.rotation.sell_symbol == "BRK.B"
     assert decision.rotation.buy_symbol == "VOO"
-    assert decision.rotation.amount == Decimal("20000.00")
-    assert decision.rotation.sell_shares == Decimal("50.0000")
-    assert decision.rotation.buy_shares == Decimal("40.0000")
+    assert decision.rotation.amount == Decimal("10000.00")
+    assert decision.rotation.sell_shares == Decimal("25.0000")
+    assert decision.rotation.buy_shares == Decimal("20.0000")
 
 
 def test_core_uses_completed_prices_for_fullness_before_rotation() -> None:

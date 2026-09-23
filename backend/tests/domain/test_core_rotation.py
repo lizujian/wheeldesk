@@ -9,7 +9,7 @@ from app.domain.core_rotation import RotationUsage, evaluate_rotation, ratio_ban
 def rotate(**overrides):
     inputs = dict(full=True, brk_value=D("100000"), voo_value=D("0"),
                   brk_price=D("400"), voo_price=D("500"),
-                  ratios=[(date(2026, 9, day), D("0.8")) for day in (2, 3, 4)])
+                  ratios=[(date(2026, 9, day), D("0.8")) for day in (1, 2, 3, 4, 5)])
     inputs.update(overrides)
     return evaluate_rotation(**inputs)
 
@@ -23,36 +23,36 @@ def test_exact_thresholds(ratio, target, seller):
     assert band[:2] == (seller, D(target))
 
 
-def test_jump_to_third_band_keeps_twenty_point_execution_cap():
-    result = rotate(ratios=[(date(2026, 9, day), D("0.9")) for day in (2, 3, 4)])
+def test_jump_to_third_band_keeps_ten_point_execution_cap():
+    result = rotate(ratios=[(date(2026, 9, day), D("0.9")) for day in (1, 2, 3, 4, 5)])
     assert result.actionable
     assert result.target_brk_weight == D("0.3")
-    assert result.next_brk_weight == D("0.8")
-    assert result.amount == D("20000")
+    assert result.next_brk_weight == D("0.9")
+    assert result.amount == D("10000")
 
 
 def test_more_extreme_closes_confirm_current_band_but_a_single_jump_does_not():
-    confirmed = rotate(ratios=[(date(2026, 9, day), value) for day, value in [(2, D(".9")), (3, D(".84")), (4, D(".84"))]])
+    confirmed = rotate(ratios=[(date(2026, 9, day), D(".84")) for day in (1, 2, 3, 4, 5)])
     assert confirmed.actionable
-    unconfirmed = rotate(ratios=[(date(2026, 9, day), value) for day, value in [(2, D(".8")), (3, D(".8")), (4, D(".9"))]])
+    unconfirmed = rotate(ratios=[(date(2026, 9, day), value) for day, value in [(1, D(".8")), (2, D(".8")), (3, D(".8")), (4, D(".8")), (5, D(".9"))]])
     assert unconfirmed.code == "confirming"
     assert unconfirmed.confirmation_days == 1
 
 
 def test_neutral_zone_and_direction_never_force_initial_weights():
-    neutral = rotate(brk_value=D("20000"), voo_value=D("80000"), ratios=[(date(2026, 9, day), D(".75")) for day in (2, 3, 4)])
+    neutral = rotate(brk_value=D("20000"), voo_value=D("80000"), ratios=[(date(2026, 9, day), D(".75")) for day in (1, 2, 3, 4, 5)])
     assert neutral.code == "neutral"
     assert neutral.next_brk_weight == D(".2")
-    reverse = rotate(ratios=[(date(2026, 9, day), D(".71")) for day in (2, 3, 4)])
+    reverse = rotate(ratios=[(date(2026, 9, day), D(".71")) for day in (1, 2, 3, 4, 5)])
     assert reverse.code == "within_target"
     assert reverse.next_brk_weight == D("1")
 
 
 def test_partial_executions_consume_shared_window_budget():
-    result = rotate(usage=RotationUsage(used_weight=D(".12")))
-    assert result.weight_change == D(".08")
-    assert result.amount == D("8000")
-    assert rotate(usage=RotationUsage(used_weight=D(".20"))).code == "window_limit"
+    result = rotate(usage=RotationUsage(used_weight=D(".04")))
+    assert result.weight_change == D(".06")
+    assert result.amount == D("6000")
+    assert rotate(usage=RotationUsage(used_weight=D(".10"))).code == "window_limit"
     assert rotate(usage=RotationUsage(complete=False)).code == "execution_unverified"
 
 
@@ -64,6 +64,50 @@ def test_pending_puts_only_block_the_direction_they_would_reverse():
     projected = rotate(brk_value=D("60000"), voo_value=D("40000"), pending_brk_shares=D("100"))
     assert projected.current_brk_weight == D(".6")
     assert projected.projected_brk_weight == D("100000") / D("140000")
+
+
+def test_brk_reduction_can_use_schd_as_the_lower_weight_destination():
+    result = rotate(
+        voo_value=D("40000"),
+        schd_value=D("10000"),
+        schd_price=D("33"),
+        ratios=[(date(2026, 9, day), D(".9")) for day in (1, 2, 3, 4, 5)],
+    )
+
+    assert result.actionable
+    assert result.sell_symbol == "BRK.B"
+    assert result.buy_symbol == "SCHD"
+    assert result.current_schd_weight == D(".06666666666666666666666666667")
+
+
+def test_schd_can_be_the_source_when_brk_needs_to_increase():
+    result = rotate(
+        brk_value=D("30000"),
+        voo_value=D("20000"),
+        schd_value=D("50000"),
+        schd_price=D("33"),
+        ratios=[(date(2026, 9, day), D(".65")) for day in (1, 2, 3, 4, 5)],
+    )
+
+    assert result.actionable
+    assert result.sell_symbol == "SCHD"
+    assert result.buy_symbol == "BRK.B"
+    assert result.next_schd_weight < result.current_schd_weight
+
+
+def test_rotation_avoids_schd_as_source_when_it_has_pending_puts():
+    result = rotate(
+        brk_value=D("30000"),
+        voo_value=D("50000"),
+        schd_value=D("20000"),
+        schd_price=D("33"),
+        pending_schd_shares=D("100"),
+        ratios=[(date(2026, 9, day), D(".65")) for day in (1, 2, 3, 4, 5)],
+    )
+
+    assert result.actionable
+    assert result.sell_symbol == "VOO"
+    assert result.buy_symbol == "BRK.B"
 
 
 def test_tolerance_missing_data_and_daily_limit():

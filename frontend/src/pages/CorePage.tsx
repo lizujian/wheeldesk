@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowRightLeft, Banknote, BarChart3, CalendarClock, CircleDollarSign, Gauge, Landmark, ShieldCheck, TrendingUp, WalletCards } from 'lucide-react'
+import { AlertTriangle, Banknote, BarChart3, CalendarClock, CircleDollarSign, Gauge, Landmark, ShieldCheck, TrendingUp, WalletCards } from 'lucide-react'
 
 import { formatMoney } from '../components/AllocationChart'
 import type { CoreAssetDecision, CoreStrategyDecision, MarketSnapshot, PortfolioSummary, Position, WheelOverview, WheelPutLot } from '../lib/types'
@@ -32,7 +32,7 @@ export function CorePage({ portfolio, market, positions, overview }: {
   const cashAvailable = portfolio.capital?.cash.available ?? (portfolio.balances?.cash ?? 0)
 
   return <div className="page-stack core-console">
-    <div className="page-heading"><div><p className="eyebrow">BRK.B + VOO + SCHD CORE EQUITY</p><h1>核心仓相对定投</h1><span>SCHD 纳入核心配置 · 轮动仅作低频观察</span></div><span>{lots.length} 笔股票 · {corePuts.length} 笔待接股</span></div>
+    <div className="page-heading"><div><p className="eyebrow">BRK.B + VOO + SCHD CORE EQUITY</p><h1>核心仓相对定投</h1><span>SCHD 纳入核心配置 · 以低频分批建仓为主</span></div><span>{lots.length} 笔股票 · {corePuts.length} 笔待接股</span></div>
 
     <section className={`core-budget-band ${overTarget > 0 || unfundedCost > 0 ? 'danger' : ''}`} aria-label="核心仓预算">
       <CoreMetric icon={<WalletCards size={18} />} label="核心仓目标预算" value={target} note={`总资产动态目标 ${(targetFraction * 100).toFixed(1)}%`} />
@@ -51,7 +51,6 @@ export function CorePage({ portfolio, market, positions, overview }: {
     <CoreRelativeBoard decision={market?.core ?? null} />
     <CoreBuySignal decision={market?.core ?? null} />
     <CorePutSignal decision={market?.core ?? null} />
-    <CoreRotationSignal decision={market?.core ?? null} />
 
     <section className="core-lot-register">
       <div className="section-title"><div><p>PURCHASE LOTS</p><h2>核心仓成交批次</h2></div><span>未实现 {formatMoney(currentValue - recordedCost)}</span></div>
@@ -70,17 +69,33 @@ export function CorePage({ portfolio, market, positions, overview }: {
 }
 
 function CorePutRegister({ puts, market }: { puts: WheelPutLot[]; market: MarketSnapshot | null }) {
+  const groups = groupCorePuts(puts)
   const collateral = puts.reduce((total, put) => total + put.collateral, 0)
+  const contracts = puts.reduce((total, put) => total + put.open_quantity, 0)
   return <section className={`core-put-register ${puts.length ? 'active' : ''}`} aria-label="核心仓 Sell Put 建仓">
     <header>
       <div className="core-put-title"><ShieldCheck size={20} /><div><p>CORE ACQUISITION PUTS</p><h2>核心仓 Sell Put 建仓</h2></div></div>
-      <div className="core-put-summary"><span>{puts.length} 笔待接股</span><strong>{formatMoney(collateral)}</strong><small>核心本金担保占用</small></div>
+      <div className="core-put-summary"><span>{groups.length} 个标的 · {puts.length} 笔 · {contracts} 张待接股</span><strong>{formatMoney(collateral)}</strong><small>核心本金担保占用</small></div>
     </header>
-    {puts.length ? <div className="core-put-table">
-      <div className="core-put-row header"><span>建仓批次</span><span>到期日</span><span>行权 / 有效成本</span><span>权利金</span><span>担保占用</span><span>开仓年化</span><span>接股状态</span></div>
-      {puts.map((put, index) => <CorePutRow key={put.id} put={put} index={index} market={market} />)}
-    </div> : <div className="core-put-empty"><CalendarClock size={20} /><span>当前没有用于核心仓建仓的 Sell Put</span></div>}
+    {puts.length ? <div className="core-put-groups">{groups.map((group) => <CorePutGroup key={group.symbol} group={group} market={market} />)}</div> : <div className="core-put-empty"><CalendarClock size={20} /><span>当前没有用于核心仓建仓的 Sell Put</span></div>}
   </section>
+}
+
+function CorePutGroup({ group, market }: { group: CorePutGroupData; market: MarketSnapshot | null }) {
+  return <article className="core-put-group" aria-label={`${group.symbol} 核心仓 Sell Put`}>
+    <header className="core-put-group-header">
+      <div className="core-put-group-title"><strong>{group.symbol}</strong><span>{group.puts.length} 笔 · {group.contracts} 张待接股</span></div>
+      <div className="core-put-group-stats">
+        <div><span>总担保占用</span><strong>{formatMoney(group.collateral)}</strong></div>
+        <div><span>已收权利金</span><strong>{formatMoney(group.premiumIncome)}</strong></div>
+        <div><span>到期范围</span><strong>{group.expirationRange}</strong></div>
+      </div>
+    </header>
+    <div className="core-put-group-details">
+      <div className="core-put-row header"><span>建仓批次</span><span>到期日</span><span>行权 / 有效成本</span><span>权利金</span><span>担保占用</span><span>开仓年化</span><span>接股状态</span></div>
+      {group.puts.map((put, index) => <CorePutRow key={put.id} put={put} index={index} market={market} />)}
+    </div>
+  </article>
 }
 
 function CorePutRow({ put, index, market }: { put: WheelPutLot; index: number; market: MarketSnapshot | null }) {
@@ -92,7 +107,7 @@ function CorePutRow({ put, index, market }: { put: WheelPutLot; index: number; m
   const buffer = spot ? spot / put.strike - 1 : null
   const assignmentRisk = buffer != null && buffer < 0
   return <div className={`core-put-row ${assignmentRisk ? 'assignment-risk' : ''}`}>
-    <div><strong>{put.symbol}</strong><small>错峰第 {index + 1} 笔 · {put.open_quantity} 张</small></div>
+    <div><strong>第 {index + 1} 笔</strong><small>{put.open_quantity} 张 · {put.trade_date}</small></div>
     <div><strong>{put.expiration}</strong><small>剩余 {Math.max(dte, 0)} 天</small></div>
     <div><strong>{formatMoney(put.strike)} / {formatMoney(effectiveCost)}</strong><small>每股有效接股成本</small></div>
     <div><strong>{formatMoney(premiumIncome)}</strong><small>{formatMoney(put.premium)} / 股</small></div>
@@ -100,6 +115,32 @@ function CorePutRow({ put, index, market }: { put: WheelPutLot; index: number; m
     <div><strong>{formatPercent(put.opening_annualized_return)}</strong><small>{put.opening_dte} DTE 开仓</small></div>
     <div><strong>{assignmentRisk ? '已低于行权价' : buffer == null ? '等待行情' : `缓冲 ${formatPercent(buffer)}`}</strong><small>{assignmentRisk ? '按核心仓长期持有处理' : '接股后归入核心仓，不卖 CC'}</small></div>
   </div>
+}
+
+type CorePutGroupData = {
+  symbol: string
+  puts: WheelPutLot[]
+  contracts: number
+  collateral: number
+  premiumIncome: number
+  expirationRange: string
+}
+
+function groupCorePuts(puts: WheelPutLot[]): CorePutGroupData[] {
+  const grouped = new Map<string, WheelPutLot[]>()
+  for (const put of puts) grouped.set(put.symbol, [...(grouped.get(put.symbol) ?? []), put])
+  return [...grouped.entries()].map(([symbol, groupedPuts]) => {
+    const sortedPuts = [...groupedPuts].sort((left, right) => left.expiration.localeCompare(right.expiration) || left.id - right.id)
+    const expirations = sortedPuts.map((put) => put.expiration)
+    return {
+      symbol,
+      puts: sortedPuts,
+      contracts: sortedPuts.reduce((total, put) => total + put.open_quantity, 0),
+      collateral: sortedPuts.reduce((total, put) => total + put.collateral, 0),
+      premiumIncome: sortedPuts.reduce((total, put) => total + put.premium * 100 * put.open_quantity, 0),
+      expirationRange: expirations[0] === expirations[expirations.length - 1] ? expirations[0] : `${expirations[0]} ～ ${expirations[expirations.length - 1]}`,
+    }
+  })
 }
 
 function CoreRelativeBoard({ decision }: { decision: CoreStrategyDecision | null }) {
@@ -150,25 +191,6 @@ function CorePutSignal({ decision }: { decision: CoreStrategyDecision | null }) 
     <div><span>Sell Put 建仓{put.symbol ? ` · ${put.symbol}` : ''}</span><strong>{labels[put.code] ?? '等待'}</strong><small>7～21 天 · 每次 1 张 · 接股后归核心仓</small></div>
     {put.reference_strike != null && <div><span>参考行权价</span><strong>{formatMoney(put.reference_strike)}</strong><small>{put.strike_cap != null ? `策略上限 ${formatMoney(put.strike_cap)} · ` : ''}按实际挂牌行权价向下选择</small></div>}
     <div><span>{put.reference_strike != null ? '参考接股资金' : '直接买股资金预留'}</span><strong>{formatMoney(put.reference_strike != null ? put.collateral : put.direct_buy_reserve)}</strong><small>{put.reference_strike != null ? `保留直接买股资金至少 ${formatMoney(put.direct_buy_reserve)}` : '可用策略资金的 50%'}</small></div>
-  </section>
-}
-
-function CoreRotationSignal({ decision }: { decision: CoreStrategyDecision | null }) {
-  const rotation = decision?.rotation
-  const labels: Record<string, string> = { waiting: '核心仓未满，暂不轮动', invalid_data: '等待有效的同日收盘行情', neutral: '比率处于保持区间', within_target: '权重已满足当前档位', confirming: '等待连续 5 个交易日确认', pending_puts: '待接股可能抵消轮动，先观察', execution_unverified: '成交前仓位不完整，暂缓轮动', daily_limit: '当日已有核心仓成交', window_limit: '近 20 个交易日额度已用完', weight_constraint: '当前额度无法同时满足权重约束', opportunity: '低频观察：可评估分批轮动' }
-  const weight = (value: number | undefined) => value == null ? '—' : `${(value * 100).toFixed(1)}%`
-  return <section className={`core-rotation secondary ${rotation?.actionable ? 'actionable' : ''}`} aria-label="核心仓低频轮动观察">
-    <header><ArrowRightLeft size={19} /><div><span>SECONDARY WATCH · CORE ROTATION</span><strong>{rotation ? labels[rotation.code] ?? '等待行情' : '等待行情'}</strong><small>低频二级观察，不作为主要买入信号</small></div></header>
-    <div><span>收盘比率 / 确认</span><strong>{rotation?.ratio?.toFixed(4) ?? '—'} · {rotation?.confirmation_days ?? 0} / 5 日</strong><small>{rotation?.ratio_as_of ?? '等待刷新'} · BRK.B ÷ VOO</small></div>
-    <div><span>BRK.B 当前 / 全部接股后</span><strong>{weight(rotation?.current_brk_weight)} / {weight(rotation?.projected_brk_weight)}</strong><small>分母包含 BRK.B、VOO 与 SCHD</small></div>
-    <div><span>SCHD 当前 / 本次后</span><strong>{weight(rotation?.current_schd_weight)} / {weight(rotation?.next_schd_weight ?? rotation?.projected_schd_weight)}</strong><small>可作为承接标的，也可在增持 BRK.B 时提供资金</small></div>
-    <div><span>BRK.B 档位目标 / 本次调整后</span><strong>{weight(rotation?.target_brk_weight)} / {weight(rotation?.next_brk_weight)}</strong><small>5 个百分点以内不调整</small></div>
-    <div><span>轮动方向</span><strong>{rotation?.sell_symbol && rotation.buy_symbol ? `${rotation.sell_symbol} → ${rotation.buy_symbol}` : '暂不轮动'}</strong><small>VOO / SCHD 均可参与轮出或承接</small></div>
-    <div><span>建议金额 / 权重变化</span><strong>{formatMoney(rotation?.amount ?? 0)} · {weight(rotation?.weight_change)}</strong><small>每 20 个交易日累计最多 10 个百分点</small></div>
-    <div><span>窗口已使用 / 剩余</span><strong>{weight(rotation?.used_weight)} / {weight(rotation?.remaining_weight)}</strong><small>按实际卖出成交统计，不按提醒次数</small></div>
-    <div><span>估算双腿</span><strong>{rotation?.actionable ? `卖 ${rotation.sell_shares.toFixed(4)} · 买 ${rotation.buy_shares.toFixed(4)} 股` : '等待触发'}</strong><small>实际成交由 IBKR 报表同步</small></div>
-    <footer><span>比率 ≥ 0.78 / 0.83 / 0.88：BRK.B 目标 80% / 55% / 30%</span><span>比率 ≤ 0.72 / 0.68 / 0.65：BRK.B 目标 70% / 85% / 100%</span><small>0.72～0.78 保持 · 连续 5 日确认 · 固定档位尚未经过回测验证</small></footer>
-    {!!rotation?.executions?.length && <div className="core-rotation-executions"><strong>近 20 个交易日核心股票卖出</strong><table><thead><tr><th>成交时间</th><th>标的</th><th>卖出股数</th><th>成交价</th><th>成交金额</th><th>额度占用</th></tr></thead><tbody>{rotation.executions.map((trade) => <tr key={trade.id}><td>{trade.traded_at.replace('T', ' ')}</td><td>{trade.symbol}</td><td>{trade.quantity}</td><td>{formatMoney(trade.price)}</td><td>{formatMoney(trade.proceeds)}</td><td>{trade.weight_change == null ? '待核对' : weight(trade.weight_change)}</td></tr>)}</tbody></table><small>额度分母：成交前三只核心股总市值；卖出标的按成交价，其余标的按成交日收盘价估算。</small></div>}
   </section>
 }
 

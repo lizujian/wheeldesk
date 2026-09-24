@@ -383,6 +383,62 @@ Trades,Data,Order,Equity and Index Options,USD,GOOG 02OCT26 360 C,"2026-09-15, 1
         assert client.get("/api/profit-ledger").json()["summary"]["leaps_realized"] == 150.0
 
 
+def test_ibkr_import_links_short_call_when_multiple_leaps_can_cover_it() -> None:
+    short_report = '''Statement,Header,Field Name,Field Value
+Statement,Data,Period,"September 14, 2026"
+Open Positions,Header,DataDiscriminator,Asset Category,Currency,Symbol,Quantity,Mult,Cost Price,Cost Basis,Close Price,Value,Unrealized P/L,Expiry,Strike,Put/Call,Code
+Open Positions,Data,Summary,Equity and Index Options,USD,AVGO 23OCT26 400 C,-1,100,5.05,-505,5.25,-525,-20,2026-10-23,400,C,
+'''
+    with import_client() as client:
+        long_ids = []
+        for opened_on, expiration, strike in (
+            ("2026-08-01", "2027-02-19", 360),
+            ("2026-09-01", "2027-09-17", 330),
+        ):
+            response = client.post(
+                "/api/positions",
+                json={
+                    "bucket": "leaps",
+                    "symbol": "AVGO",
+                    "asset_type": "option",
+                    "direction": "long",
+                    "option_type": "call",
+                    "quantity": 1,
+                    "entry_price": 100,
+                    "opened_on": opened_on,
+                    "expiration": expiration,
+                    "strike": strike,
+                    "tranche": len(long_ids) + 1,
+                },
+            )
+            assert response.status_code == 201, response.text
+            long_ids.append(response.json()["id"])
+
+        preview = client.post(
+            "/api/imports/ibkr/preview",
+            json={"filename": "avgo-short.csv", "content": short_report},
+        ).json()
+        short_call = preview["rows"][0]
+        assert short_call["action"] == "create_leaps_call"
+        assert short_call["details"]["linked_position_id"] == long_ids[0]
+
+        imported = client.post(
+            "/api/imports/ibkr/auto",
+            json={"filename": "avgo-short.csv", "content": short_report},
+        )
+        assert imported.status_code == 200, imported.text
+        listing = client.get("/api/other-holdings?include_closed=true").json()
+        call = listing["leaps_call_wheels"][0]
+        assert call["category"] == "leaps_call_wheel"
+        assert call["linked_position_id"] == long_ids[0]
+        state = next(
+            state
+            for state in listing["pmcc"]["states"]
+            if state["long_position_id"] == long_ids[0]
+        )
+        assert state["status"] == "covered"
+
+
 def test_ibkr_import_classifies_qld_sell_call_as_leaps_wheel() -> None:
     qld_report = '''Statement,Header,Field Name,Field Value
 Statement,Data,Period,"July 29, 2026"

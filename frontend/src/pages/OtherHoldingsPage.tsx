@@ -8,15 +8,14 @@ import {
   History,
   Layers3,
   PackageOpen,
-  ShieldCheck,
+  RefreshCw,
   TrendingDown,
   TrendingUp,
-  Waypoints,
 } from 'lucide-react'
 
 import { formatMoney } from '../components/AllocationChart'
-import { BudgetBand, PutLot, putHasLiveExposure } from './WheelPage'
-import type { OtherHolding, OtherHoldingListing, WheelOverview } from '../lib/types'
+import { putHasLiveExposure } from './WheelPage'
+import type { OtherHolding, OtherHoldingListing, WheelOverview, WheelPutLot, WheelRound } from '../lib/types'
 import './WheelPage.css'
 import './OtherHoldingsPage.css'
 
@@ -27,10 +26,11 @@ export function OtherHoldingsPage({ listing, wheel, pmccSymbols = [] }: {
 }) {
   const [tab, setTab] = useState<'open' | 'closed'>('open')
   const pmccSymbolSet = useMemo(() => new Set(pmccSymbols), [pmccSymbols])
-  const transitionCalls = useMemo(() => {
-    const calls = listing.records.filter((record) => isSellCall(record) && !isPmccCall(record, pmccSymbolSet))
-    return [...new Map(calls.map((call) => [call.id, call])).values()]
-  }, [listing.records, pmccSymbolSet])
+  const transitionPuts = useMemo(() => wheel
+    ? wheel.rounds.flatMap((round) => round.puts
+      .filter(putHasLiveExposure)
+      .map((put) => ({ put, round })))
+    : [], [wheel])
   const visibleRecords = useMemo(
     () => listing.records.filter((record) => !(isSellCall(record) && isPmccCall(record, pmccSymbolSet))),
     [listing.records, pmccSymbolSet],
@@ -40,6 +40,7 @@ export function OtherHoldingsPage({ listing, wheel, pmccSymbols = [] }: {
     [visibleRecords, tab],
   )
   const openRecords = visibleRecords.filter((record) => record.status === 'open')
+  const openRecordCount = openRecords.length + transitionPuts.length
   const floatingProfit = openRecords.reduce((total, record) => total + (record.unrealized_profit ?? 0), 0)
   const otherValue = openRecords.reduce((total, record) => total + (record.category === 'other' ? record.current_value ?? 0 : 0), 0)
   const closedCount = visibleRecords.length - openRecords.length
@@ -62,124 +63,76 @@ export function OtherHoldingsPage({ listing, wheel, pmccSymbols = [] }: {
       <div><FileInput size={19} /><span><strong>报表为准</strong><small>新增、数量、成本与持仓状态通过 IBKR 导入对账。</small></span></div>
     </section>
 
-    {wheel && <WheelTransitionSection wheel={wheel} callWheels={transitionCalls} />}
-
     <div className="segmented-control other-tabs" aria-label="其他持仓视图">
-      <button className={tab === 'open' ? 'active' : ''} onClick={() => setTab('open')}><Boxes size={15} />当前持仓 <b>{openRecords.length}</b></button>
+      <button className={tab === 'open' ? 'active' : ''} onClick={() => setTab('open')}><Boxes size={15} />当前持仓 <b>{openRecordCount}</b></button>
       <button className={tab === 'closed' ? 'active' : ''} onClick={() => setTab('closed')}><History size={15} />退出记录 <b>{closedCount}</b></button>
     </div>
 
     <section className="other-register">
       <header className="section-title">
         <div><p>{tab === 'open' ? 'OPEN POSITIONS' : 'EXIT ARCHIVE'}</p><h2>{tab === 'open' ? '报表当前持仓' : '历史退出记录'}</h2></div>
-        <span>{records.length} 笔</span>
+        <span>{records.length + (tab === 'open' ? transitionPuts.length : 0)} 笔</span>
       </header>
-      {records.length ? <div className="other-table" role="table" aria-label={tab === 'open' ? '当前其他持仓' : '其他持仓退出记录'}>
+      {records.length || (tab === 'open' && transitionPuts.length) ? <div className="other-table" role="table" aria-label={tab === 'open' ? '当前其他持仓' : '其他持仓退出记录'}>
         <div className="other-row head" role="row">
           <span>分类 / 标的</span><span>方向</span><span>数量</span><span>平均成本</span><span>{tab === 'open' ? '当前价格' : '退出价格'}</span><span>{tab === 'open' ? '当前价值' : '已实现盈亏'}</span><span>{tab === 'open' ? '未实现盈亏' : '退出日期'}</span><span>数据状态</span>
         </div>
+        {tab === 'open' && transitionPuts.map(({ put, round }) => <TransitionPutRow key={`wheel-${put.id}`} put={put} round={round} />)}
         {records.map((record) => <HoldingRow key={record.id} record={record} />)}
       </div> : <div className="other-empty"><PackageOpen size={26} /><strong>{tab === 'open' ? '报表中没有策略外持仓' : '尚无退出记录'}</strong></div>}
     </section>
   </div>
 }
 
-function WheelTransitionSection({ wheel, callWheels }: { wheel: WheelOverview; callWheels: OtherHolding[] }) {
-  const activeRounds = [...wheel.rounds].reverse().map((round) => ({
-    ...round,
-    puts: round.puts.filter(putHasLiveExposure),
-  })).filter((round) => round.puts.length > 0)
-  const activeCalls = callWheels.filter((call) => call.status === 'open')
-  const livePutCount = activeRounds.reduce((total, round) => total + round.puts.length, 0)
-  const activeCallContracts = activeCalls.reduce((total, call) => total + call.quantity, 0)
-  const symbols = [...new Set([
-    ...activeRounds.flatMap((round) => round.puts.map((put) => put.symbol)),
-    ...callWheels.map((call) => call.symbol),
-  ])].sort()
-  const clusters = symbols.map((symbol) => ({
-    symbol,
-    rounds: activeRounds.map((round) => ({ ...round, puts: round.puts.filter((put) => put.symbol === symbol) })).filter((round) => round.puts.length > 0),
-    calls: callWheels.filter((call) => call.symbol === symbol),
-  }))
-
-  return <section className="wheel-transition" aria-label="Wheel 过渡仓">
-    <header className="wheel-transition-header">
-      <div><p>TRANSITION BOOK</p><h2>Wheel 过渡仓</h2><span>按标的聚类管理已有 Sell Put、展期、接股与 Sell Call，不再扩张仓位</span></div>
-      <div className="wheel-transition-status"><Waypoints size={17} /><strong>只管理，不扩张</strong><small>不生成新的 Wheel 开仓信号</small></div>
-    </header>
-
-    <BudgetBand overview={wheel} />
-
-    <div className="wheel-transition-note"><ShieldCheck size={16} /><span>Wheel 不再参与新开仓信号；已有仓位仍按原规则结算。当前台账只管理 Wheel Put 链与普通 Sell Call。</span></div>
-
-    <section className="wheel-register transition-register" aria-label="Wheel 个股策略台账">
-      <div className="section-title">
-        <div><p>LIVE TRANSITION REGISTER</p><h2>按标的管理</h2></div>
-        <span>{symbols.length} 个标的 · {livePutCount} 笔 Sell Put · {activeCallContracts} 张活动 Sell Call · 累计已实现 {formatMoney(wheel.realized_profit)}</span>
-      </div>
-      {clusters.length === 0
-        ? <div className="wheel-empty"><CircleDollarSign size={22} /><div><p>当前没有需要管理的 Wheel / Sell Call 仓位</p><small>历史记录仍保留在账本中。</small></div></div>
-        : <div className="wheel-transition-clusters">{clusters.map((cluster) => <TransitionCluster key={cluster.symbol} {...cluster} />)}</div>}
-    </section>
-
-    <footer><ShieldCheck size={15} /><span>AVGO Sell Put 与其展期链路保留在 Wheel 过渡仓；普通 Sell Call 仍按 IBKR 报表更新。</span></footer>
-  </section>
-}
-
-function TransitionCluster({ symbol, rounds, calls }: {
-  symbol: string
-  rounds: Array<WheelOverview['rounds'][number]>
-  calls: OtherHolding[]
-}) {
-  const activeCalls = calls.filter((call) => call.status === 'open')
-  const historyCalls = calls.filter((call) => call.status !== 'open')
-  const putCount = rounds.reduce((total, round) => total + round.puts.length, 0)
-  const callContracts = activeCalls.reduce((total, call) => total + call.quantity, 0)
-  return <article className="wheel-transition-cluster" aria-label={`${symbol} 个股策略簇`}>
-    <header>
-      <div><span>INDIVIDUAL STRATEGY CLUSTER</span><h3>{symbol}</h3></div>
-      <div className="wheel-transition-cluster-summary"><strong>{putCount ? `${putCount} 笔 Sell Put` : '无 Sell Put'}</strong><strong>{callContracts ? `${callContracts} 张活动 Sell Call` : '无活动 Sell Call'}</strong></div>
-    </header>
-    <div className="wheel-transition-cluster-body">
-      {rounds.map((round) => <section className={`wheel-round ${round.status}`} key={round.id}>
-        <header><div><span>第 {round.number} 轮</span><strong>{round.status === 'active' ? '进行中' : '持仓链路'}</strong></div><div><small>{round.opened_on}{round.closed_on ? ` 至 ${round.closed_on}` : ''}</small><b>{formatMoney(round.realized_profit)}</b></div></header>
-        <div className="wheel-lots">{round.puts.map((put) => <PutLot key={put.id} put={put} roundNumber={round.number} />)}</div>
-      </section>)}
-      {calls.length > 0 && <section className="wheel-transition-short-calls" aria-label={`${symbol} Sell Call 台账`}>
-        <header><div><p>SELL CALL CASH FLOW</p><h4>Sell Call</h4></div><span>{activeCalls.length} 笔活动{historyCalls.length ? ` · ${historyCalls.length} 笔历史` : ''}</span></header>
-        {activeCalls.map((call) => <TransitionShortCall key={call.id} call={call} />)}
-        {historyCalls.length > 0 && <details><summary>查看已平仓 Sell Call（{historyCalls.length} 笔）</summary>{historyCalls.map((call) => <TransitionShortCall key={call.id} call={call} />)}</details>}
-      </section>}
+function TransitionPutRow({ put, round }: { put: WheelPutLot; round: WheelRound }) {
+  const currentPrice = put.quote_last ?? put.theoretical_base
+  const buybackValue = currentPrice == null ? null : currentPrice * put.open_quantity * 100
+  const premiumTotal = put.premium * put.quantity * 100
+  const unrealized = buybackValue == null ? null : premiumTotal - buybackValue
+  const liveQuantity = put.open_quantity > 0 ? put.open_quantity : put.assigned_contracts
+  const status = put.open_quantity > 0 ? '持仓中' : put.share_lots.some((share) => share.state === 'held') ? '已接股' : '管理中'
+  const roundCash = roundCashReceived(round)
+  return <div className="other-row transition-row" role="row" aria-label={`Wheel 过渡仓 ${put.symbol} Sell Put #${put.id}`}>
+    <div className="other-instrument">
+      <span className="other-category wheel_transition">Wheel 过渡仓</span>
+      <strong>{put.symbol} ${put.strike} Put</strong>
+      <small>第 {round.number} 轮 · {put.trade_date} · 到期 {put.expiration}</small>
+      <small className="transition-detail">权利金总额 {formatMoney(premiumTotal)} · 当前担保 {formatMoney(put.collateral)} · {status}</small>
+      {put.rolled_from && <small className="transition-detail"><RefreshCw size={11} />由 ${put.rolled_from.from_strike} 展期至 ${put.rolled_from.to_strike} · {roundCashLabel(roundCash)} {formatMoney(Math.abs(roundCash))}</small>}
+      {put.rolled_to && <small className="transition-detail"><RefreshCw size={11} />已展期至 ${put.rolled_to.to_strike} · {roundCashLabel(roundCash)} {formatMoney(Math.abs(roundCash))}</small>}
     </div>
-  </article>
+    <span className="direction short">Short Put</span>
+    <strong>{liveQuantity} / {put.quantity} 张</strong>
+    <span>{formatMoney(put.premium)}</span>
+    <span>{currentPrice == null ? '等待报价' : formatMoney(currentPrice)}</span>
+    <strong>{buybackValue == null ? formatMoney(put.collateral) : formatMoney(buybackValue)}</strong>
+    <span className={unrealized == null ? '' : unrealized >= 0 ? 'positive' : 'negative'}>{unrealized == null ? '-' : formatMoney(unrealized)}</span>
+    <small className="quote-state">{putQuoteLabel(put)}</small>
+  </div>
 }
 
-function TransitionShortCall({ call }: { call: OtherHolding }) {
-  const open = call.status === 'open'
-  const buybackPrice = open ? call.current_price : call.exit_price
-  const buybackValue = buybackPrice == null ? null : Math.abs(buybackPrice * call.quantity * call.multiplier)
-  const premiumTotal = (call.entry_price ?? 0) * call.quantity * call.multiplier
-  const netCashFlow = call.pmcc_state?.net_cash_flow ?? (buybackValue == null ? null : premiumTotal - buybackValue)
-  const status = open ? shortCallStatus(call.pmcc_state?.status) : call.status === 'closed' ? '已平仓' : '已结束'
-  return <article className={`wheel-transition-call-card ${netCashFlow != null && netCashFlow < 0 ? 'loss' : ''}`} aria-label={`${call.symbol} Sell Call #${call.id}`}>
-    <div className="wheel-transition-call-title"><b>{call.symbol}</b><strong>{formatMoney(call.strike ?? 0)} Call</strong><span>{status}</span></div>
-    <div><small>合约</small><strong>{call.quantity} 张</strong></div>
-    <div><small>权利金 / 股</small><strong>{formatMoney(call.entry_price ?? 0)}</strong></div>
-    <div><small>权利金总额</small><strong>{formatMoney(premiumTotal)}</strong></div>
-    <div><small>{open ? '当前买回价' : '退出价格'}</small><strong>{buybackPrice == null ? '等待报价' : formatMoney(buybackPrice)}</strong></div>
-    <div><small>{open ? '净现金流' : '已实现盈亏'}</small><strong>{open ? netCashFlow == null ? '等待报价' : formatMoney(netCashFlow) : formatMoney(call.realized_profit ?? 0)}</strong></div>
-    <div><small>到期日</small><strong>{call.expiration ?? '—'}</strong></div>
-    {call.linked_position_id && <small className="wheel-transition-call-link">关联 Long Call #{call.linked_position_id} · 覆盖 {call.pmcc_state ? `${(call.pmcc_state.coverage_ratio * 100).toFixed(0)}%` : '待核对'}</small>}
-    {call.pmcc_state && <small className="wheel-transition-call-link">最大损失 {formatMoney(call.pmcc_state.maximum_loss)} · Short DTE {call.pmcc_state.short_dte ?? '—'}{call.pmcc_state.assignment_risk ? ' · 行权风险' : ''}</small>}
-  </article>
+function roundCashReceived(round: WheelRound) {
+  const realized = round.realized_profit
+  const openPutPremium = round.puts.reduce((total, put) => total + put.premium * put.open_quantity * 100, 0)
+  const openCallPremium = round.puts.reduce(
+    (total, put) => total + put.share_lots.reduce(
+      (shareTotal, share) => shareTotal + share.calls.reduce(
+        (callTotal, call) => callTotal + (call.state === 'open' ? call.premium * call.quantity * 100 : 0),
+        0,
+      ),
+      0,
+    ),
+    0,
+  )
+  return realized + openPutPremium + openCallPremium
 }
 
-function shortCallStatus(status?: NonNullable<OtherHolding['pmcc_state']>['status']) {
-  if (status === 'covered') return '已覆盖'
-  if (status === 'needs_roll') return '进入展期窗口'
-  if (status === 'assignment_risk') return '行权风险'
-  if (status === 'expired') return '已到期'
-  return '未覆盖 / 待核对'
+function roundCashLabel(value: number) { return value >= 0 ? '共收' : '共付' }
+
+function putQuoteLabel(put: WheelPutLot) {
+  if (put.quote_source === 'public') return put.quote_as_of ?? '公开报价'
+  if (put.quote_source === 'theoretical') return '理论估算'
+  return '等待行情刷新'
 }
 
 function isSellCall(record: OtherHolding) {

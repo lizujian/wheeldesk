@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
@@ -139,6 +139,7 @@ describe('operating pages', () => {
     )
 
     expect(screen.queryByRole('article', { name: 'LEAPS 容量槽位 1' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('tab', { name: /当前持仓/ }))
     expect(screen.getByRole('region', { name: 'QQQ / QLD 当前持仓' })).toBeInTheDocument()
     expect(screen.getByRole('region', { name: '万亿俱乐部 LEAPS' })).toBeInTheDocument()
     expect(screen.getByText('模拟数据')).toBeInTheDocument()

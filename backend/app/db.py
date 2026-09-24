@@ -211,6 +211,19 @@ def _migrate_strategy_positions(selected_engine: Engine) -> None:
                 )
             )
         )
+        allocated: dict[int, Decimal] = {}
+        existing_pmcc_calls = session.scalars(
+            select(UnmanagedPositionRecord).where(
+                UnmanagedPositionRecord.status == "open",
+                UnmanagedPositionRecord.category.in_({"pmcc", "leaps_call_wheel"}),
+                UnmanagedPositionRecord.linked_position_id.is_not(None),
+            )
+        )
+        for call in existing_pmcc_calls:
+            assert call.linked_position_id is not None
+            allocated[call.linked_position_id] = (
+                allocated.get(call.linked_position_id, Decimal("0")) + call.quantity
+            )
         for record in strategy_calls:
             if record.symbol == "QLD":
                 # A QLD replacement position covers one call with 100 shares.
@@ -242,10 +255,32 @@ def _migrate_strategy_positions(selected_engine: Engine) -> None:
                         )
                     )
                 )
-            if len(candidates) != 1:
+            candidates = sorted(
+                candidates,
+                key=lambda candidate: (candidate.opened_on, candidate.id),
+            )
+            required_quantity = (
+                record.quantity * Decimal("100")
+                if record.symbol == "QLD"
+                else record.quantity
+            )
+            candidate = next(
+                (
+                    position
+                    for position in candidates
+                    if position.quantity
+                    - allocated.get(position.id, Decimal("0"))
+                    >= required_quantity
+                ),
+                None,
+            )
+            if candidate is None:
                 continue
             record.category = LEAPS_CALL_WHEEL_CATEGORY
-            record.linked_position_id = candidates[0].id
+            record.linked_position_id = candidate.id
+            allocated[candidate.id] = (
+                allocated.get(candidate.id, Decimal("0")) + required_quantity
+            )
             _update_import_entity(
                 session,
                 record.id,

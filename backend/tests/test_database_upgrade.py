@@ -384,6 +384,103 @@ def test_initialize_database_reclassifies_existing_core_put_and_leaps_call(
         assert imported[2].entity_type == "leaps_call_wheel"
 
 
+def test_initialize_database_allocates_legacy_pmcc_calls_across_multiple_leaps(
+    tmp_path: Path,
+) -> None:
+    engine = create_database_engine(tmp_path / "multiple-leaps-pmcc.db")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        positions = [
+            PositionRecord(
+                bucket="leaps",
+                symbol="AVGO",
+                asset_type="option",
+                direction="long",
+                option_type="call",
+                quantity=1,
+                multiplier=100,
+                entry_price=100,
+                current_price=110,
+                opened_on=date(2026, 8, 1),
+                expiration=date(2027, 2, 19),
+                strike=360,
+                entry_fees=0,
+            ),
+            PositionRecord(
+                bucket="leaps",
+                symbol="AVGO",
+                asset_type="option",
+                direction="long",
+                option_type="call",
+                quantity=1,
+                multiplier=100,
+                entry_price=90,
+                current_price=105,
+                opened_on=date(2026, 9, 1),
+                expiration=date(2027, 9, 17),
+                strike=330,
+                entry_fees=0,
+            ),
+        ]
+        session.add_all(positions)
+        session.flush()
+        position_ids = [position.id for position in positions]
+        session.add_all(
+            [
+                UnmanagedPositionRecord(
+                    category="other",
+                    symbol="AVGO",
+                    asset_type="option",
+                    direction="short",
+                    option_type="call",
+                    quantity=1,
+                    multiplier=100,
+                    entry_price=5,
+                    current_price=5.25,
+                    opened_on=date(2026, 9, 10),
+                    expiration=date(2026, 10, 23),
+                    strike=400,
+                ),
+                UnmanagedPositionRecord(
+                    category="other",
+                    symbol="AVGO",
+                    asset_type="option",
+                    direction="short",
+                    option_type="call",
+                    quantity=1,
+                    multiplier=100,
+                    entry_price=4,
+                    current_price=4.25,
+                    opened_on=date(2026, 9, 11),
+                    expiration=date(2026, 11, 20),
+                    strike=410,
+                ),
+            ]
+        )
+        session.commit()
+
+    initialize_database(engine)
+    initialize_database(engine)
+
+    with Session(engine) as session:
+        calls = list(
+            session.scalars(
+                select(UnmanagedPositionRecord)
+                .where(UnmanagedPositionRecord.symbol == "AVGO")
+                .order_by(UnmanagedPositionRecord.id)
+            )
+        )
+
+        assert [call.category for call in calls] == [
+            "leaps_call_wheel",
+            "leaps_call_wheel",
+        ]
+        assert [call.linked_position_id for call in calls] == [
+            position_ids[0],
+            position_ids[1],
+        ]
+
+
 def test_initialize_database_distributes_legacy_unallocated_once_and_preserves_trades(
     tmp_path: Path,
 ) -> None:

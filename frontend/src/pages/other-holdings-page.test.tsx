@@ -66,6 +66,32 @@ const wheel: WheelOverview = {
   rounds: [],
 }
 
+const wheelWithTransition: WheelOverview = {
+  ...wheel,
+  rounds: [{
+    id: 9, number: 3, opened_on: '2026-09-01', closed_on: null, status: 'active', realized_profit: 100,
+    voided_at: null, void_reason: null,
+    puts: [{
+      id: 8, round_id: 9, capital_bucket: 'wheel', symbol: 'AVGO', batch_number: 1,
+      trade_date: '2026-09-01', expiration: '2026-10-23', strike: 400, premium: 5,
+      quantity: 1, open_quantity: 1, assigned_contracts: 0, entry_tqqq_price: 450,
+      earnings_confirmed: true, state: 'open', closed_on: null, close_premium: null,
+      realized_profit: 100, collateral: 40000, opening_dte: 52, opening_annualized_return: .09,
+      early_close_days: null, early_close_annualized_return: null, early_close_return_kind: null,
+      quote_source: 'public', quote_bid: 4.5, quote_ask: 5, quote_last: 4.75, quote_iv: .3,
+      quote_as_of: '2026-09-23', theoretical_low: null, theoretical_base: null, theoretical_high: null,
+      captured_fraction: null, early_close_code: null, early_close_message: null, voided_at: null,
+      void_reason: null, roll_count: 1,
+      rolled_from: {
+        from_put_id: 7, to_put_id: 8, rolled_on: '2026-09-10', from_expiration: '2026-09-18',
+        from_strike: 390, to_expiration: '2026-10-23', to_strike: 400, buyback_premium: 4,
+        new_premium: 5, quantity: 1, net_credit: 100, previous_realized_profit: 100,
+      },
+      rolled_to: null, share_lots: [],
+    }],
+  }],
+}
+
 describe('other holdings page', () => {
   it('shows BOXX as cash equivalent and has no manual entry form', () => {
     render(<OtherHoldingsPage listing={listing} />)
@@ -89,17 +115,22 @@ describe('other holdings page', () => {
     expect(screen.queryByRole('button', { name: /删除/ })).not.toBeInTheDocument()
   })
 
-  it('merges the Wheel transition book without showing Wheel entry signals', () => {
-    render(<OtherHoldingsPage listing={listing} wheel={wheel} pmccSymbols={['AVGO']} />)
+  it('keeps Wheel transition puts in the current holdings report without extra sections', () => {
+    render(<OtherHoldingsPage listing={listing} wheel={wheelWithTransition} pmccSymbols={['AVGO']} />)
 
     expect(screen.getByRole('heading', { name: '其他持仓与过渡仓' })).toBeInTheDocument()
-    expect(screen.getByRole('region', { name: 'Wheel 过渡仓' })).toBeInTheDocument()
-    expect(screen.getByText('不生成新的 Wheel 开仓信号')).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Wheel 过渡仓' })).not.toBeInTheDocument()
     expect(screen.queryByRole('article', { name: 'GOOG Sell Call #4' })).not.toBeInTheDocument()
     expect(screen.queryByRole('article', { name: 'AVGO Sell Call #5' })).not.toBeInTheDocument()
-    expect(screen.queryAllByText('权利金总额')).toHaveLength(0)
+    expect(screen.queryAllByText(/权利金总额/)).toHaveLength(1)
     expect(screen.queryByText('PMCC Short Call')).not.toBeInTheDocument()
-    expect(screen.queryByRole('row', { name: /AVGO/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('row', { name: 'AVGO 2026-10-23 $400 Call' })).not.toBeInTheDocument()
     expect(screen.queryByText('Sell Put 开仓条件')).not.toBeInTheDocument()
+    expect(screen.getByRole('row', { name: 'Wheel 过渡仓 AVGO Sell Put #8' })).toBeInTheDocument()
+    const transitionRow = screen.getByRole('row', { name: 'Wheel 过渡仓 AVGO Sell Put #8' })
+    expect(transitionRow).toHaveTextContent('当前担保 $40,000.00')
+    expect(transitionRow).toHaveTextContent('共收 $600.00')
+    expect(screen.queryByText('LIVE TRANSITION REGISTER')).not.toBeInTheDocument()
+    expect(screen.queryByRole('article', { name: /个股策略簇/ })).not.toBeInTheDocument()
   })
 })

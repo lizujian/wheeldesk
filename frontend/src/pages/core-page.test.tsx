@@ -126,7 +126,21 @@ describe('core equity page', () => {
     expect(screen.getByText('核心仓 Sell Put 建仓')).toBeInTheDocument()
     expect(screen.getByText('2026-09-18')).toBeInTheDocument()
     expect(screen.getByText('2026-10-02')).toBeInTheDocument()
-    expect(screen.getByText('$100,000.00')).toBeInTheDocument()
+    expect(screen.getAllByText('$100,000.00').length).toBeGreaterThan(0)
+  })
+
+  it('clusters core puts by symbol while keeping each contract detail', () => {
+    const schdPut = { ...corePut(23, '2026-10-23', 0.35), symbol: 'SCHD' as const, strike: 33, open_quantity: 10, quantity: 10, collateral: 33000 }
+    render(<CorePage portfolio={portfolio} market={market} positions={positions} overview={{ ...wheel, core_puts: [...(wheel.core_puts ?? []), schdPut] }} />)
+
+    const brkGroup = screen.getByRole('article', { name: 'BRK.B 核心仓 Sell Put' })
+    const schdGroup = screen.getByRole('article', { name: 'SCHD 核心仓 Sell Put' })
+    expect(within(brkGroup).getByText('2 笔 · 2 张待接股')).toBeInTheDocument()
+    expect(within(brkGroup).getAllByText('$100,000.00').length).toBeGreaterThan(0)
+    expect(within(schdGroup).getByText('1 笔 · 10 张待接股')).toBeInTheDocument()
+    expect(within(schdGroup).getAllByText('$33,000.00').length).toBeGreaterThan(0)
+    expect(within(schdGroup).getByText('$0.35 / 股')).toBeInTheDocument()
+    expect(within(schdGroup).getAllByText('2026-10-23').length).toBeGreaterThan(0)
   })
 
   it('does not expose manual position mutation controls', () => {
@@ -155,22 +169,4 @@ describe('core equity page', () => {
     expect(within(signal).getByText('约 14.1667 股')).toBeInTheDocument()
   })
 
-  it('shows a paired full-core rotation signal', () => {
-    const fullMarket: MarketSnapshot = {
-      ...market,
-      core: {
-        ...market.core!, mode: 'full', total_value: 50000, target_gap: 0,
-        selected_symbol: null, recommendation: null, rotation_confirmation_days: 5,
-        rotation: { code: 'opportunity', actionable: true, sell_symbol: 'BRK.B', buy_symbol: 'VOO', amount: 3000, sell_shares: 6.1224, buy_shares: 5, ratio: .84, confirmation_days: 5, current_brk_weight: .8, projected_brk_weight: .9, target_brk_weight: .55, next_brk_weight: .74, used_weight: .04, remaining_weight: .06 },
-      },
-    }
-    render(<CorePage portfolio={portfolio} market={fullMarket} positions={positions} />)
-    const rotation = screen.getByRole('region', { name: '核心仓低频轮动观察' })
-    expect(within(rotation).getByText('低频观察：可评估分批轮动')).toBeInTheDocument()
-    expect(within(rotation).getByText('BRK.B → VOO')).toBeInTheDocument()
-    expect(within(rotation).getByText('$3,000.00 · —')).toBeInTheDocument()
-    expect(within(rotation).getByText('0.8400 · 5 / 5 日')).toBeInTheDocument()
-    expect(within(rotation).getByText('80.0% / 90.0%')).toBeInTheDocument()
-    expect(within(rotation).getByText('55.0% / 74.0%')).toBeInTheDocument()
-  })
 })

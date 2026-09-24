@@ -33,11 +33,37 @@ const emptyWheel: WheelOverview = {
   rounds: [],
 }
 const emptyOtherHoldings: OtherHoldingListing = { records: [], total_value: 0, cash_equivalent_value: 0, other_value: 0, unpriced_count: 0 }
+export const MARKET_CACHE_KEY = 'wheeldesk.market-snapshot.v1'
+
+function readCachedMarket(): MarketSnapshot | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(MARKET_CACHE_KEY)
+    if (!raw) return null
+    const parsed: unknown = JSON.parse(raw)
+    if (!isRecord(parsed) || !isRecord(parsed.market) || !isRecord(parsed.market.qqq)) return null
+    return parsed as unknown as MarketSnapshot
+  } catch {
+    return null
+  }
+}
+
+function writeCachedMarket(snapshot: MarketSnapshot) {
+  try { window.localStorage.setItem(MARKET_CACHE_KEY, JSON.stringify(snapshot)) } catch { /* localStorage may be unavailable */ }
+}
+
+function clearCachedMarket() {
+  try { window.localStorage.removeItem(MARKET_CACHE_KEY) } catch { /* localStorage may be unavailable */ }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
 
 export default function App() {
   const { pathname } = useLocation()
   const [portfolio, setPortfolio] = useState<PortfolioSummary>(emptyPortfolio)
-  const [market, setMarket] = useState<MarketSnapshot | null>(null)
+  const [market, setMarket] = useState<MarketSnapshot | null>(() => readCachedMarket())
   const [wheel, setWheel] = useState<WheelOverview>(emptyWheel)
   const [positions, setPositions] = useState<Position[]>([])
   const [positionHistory, setPositionHistory] = useState<Position[]>([])
@@ -59,8 +85,8 @@ export default function App() {
   }, [])
 
   useEffect(() => { void load() }, [load])
-  const refresh = async () => { setRefreshing(true); try { setMarket(await api.refresh()); await load() } catch (reason) { setError(reason instanceof Error ? reason.message : '刷新失败') } finally { setRefreshing(false) } }
-  const resetAll = async () => { try { await api.post('/system/reset', { confirmation: 'RESET' }); setMarket(null); await load(); setError('') } catch (reason) { setError(reason instanceof Error ? reason.message : '重置失败'); throw reason } }
+  const refresh = async () => { setRefreshing(true); try { const nextMarket = await api.refresh(); setMarket(nextMarket); writeCachedMarket(nextMarket); await load() } catch (reason) { setError(reason instanceof Error ? reason.message : '刷新失败') } finally { setRefreshing(false) } }
+  const resetAll = async () => { try { await api.post('/system/reset', { confirmation: 'RESET' }); clearCachedMarket(); setMarket(null); await load(); setError('') } catch (reason) { setError(reason instanceof Error ? reason.message : '重置失败'); throw reason } }
   const activeSignals = signals.filter((signal) => !signal.acknowledged)
   const criticalSignalCount = activeSignals.filter((signal) => signal.severity === 'critical').length
   const activeLeapsSymbols = new Set(positionHistory

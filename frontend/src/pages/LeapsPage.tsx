@@ -1,21 +1,22 @@
+import { useState } from 'react'
 import {
   Activity,
-  ArrowDownRight,
+  BriefcaseBusiness,
   Building2,
   CalendarClock,
-  Check,
   CircleDashed,
+  ChevronRight,
   Gauge,
   Landmark,
+  ListChecks,
   RefreshCw,
   ShieldAlert,
   ShieldCheck,
-  TrendingUp,
   WalletCards,
 } from 'lucide-react'
 
 import { formatMoney } from '../components/AllocationChart'
-import type { MarketSnapshot, OtherHolding, PortfolioSummary, Position, TrancheDecision, PMCCState } from '../lib/types'
+import type { ClubEntryDecision, MarketSnapshot, OtherHolding, PortfolioSummary, Position, TrancheDecision, PMCCState } from '../lib/types'
 import './LeapsPage.css'
 
 const slotFractions = [.2, .2, .2, .2, .2]
@@ -27,6 +28,7 @@ export function LeapsPage({ market, positions, portfolio, leapsCalls = [] }: {
   portfolio: PortfolioSummary
   leapsCalls?: OtherHolding[]
 }) {
+  const [view, setView] = useState<'signals' | 'holdings'>('signals')
   const leapsHistory = positions.filter((position) => position.bucket === 'leaps')
   const leaps = leapsHistory.filter((position) => position.status === 'open')
   const closedById = new Map(leapsHistory
@@ -36,6 +38,7 @@ export function LeapsPage({ market, positions, portfolio, leapsCalls = [] }: {
   const clubLeaps = leaps.filter((position) => isClubPosition(position) && !isExcludedClubSymbol(position.symbol))
   const qqqLeapsCalls = leapsCalls.filter((record) => record.symbol === 'QQQ' || record.symbol === 'QLD')
   const clubLeapsCalls = leapsCalls.filter((record) => !['QQQ', 'QLD'].includes(record.symbol) && !isExcludedClubSymbol(record.symbol))
+  const clubDecisions = (market?.leaps_club?.decisions ?? []).filter((decision) => !isExcludedClubSymbol(decision.symbol))
   const pmcc = market?.pmcc
   const accountEquity = portfolio.total_equity ?? 0
   const target = pmcc?.budget.total_target ?? accountEquity * .25
@@ -49,7 +52,6 @@ export function LeapsPage({ market, positions, portfolio, leapsCalls = [] }: {
   }
   const overTarget = Math.max((pmcc?.total.committed ?? capital.committed) - target, 0)
   const unfundedExposure = capital.cash_occupancy
-  const decisions = market?.leaps ?? defaultDecisions()
   const fifo = market?.leaps_fifo
 
   return <div className="page-stack leaps-console">
@@ -70,8 +72,6 @@ export function LeapsPage({ market, positions, portfolio, leapsCalls = [] }: {
       <span>{overTarget > 0 && <>车轮与 LEAPS 合计成本超过共享目标 {formatMoney(overTarget)}。</>}{unfundedExposure > 0 && <>期权共享池临时占用现金 {formatMoney(unfundedExposure)}。</>}</span>
     </div>}
 
-    <EntrySignalBand market={market} decisions={decisions} />
-
     {fifo?.required && fifo.candidate && <div className="leaps-fifo-alert" role="alert">
       <RefreshCw size={17} />
       <div><strong>FIFO 换仓候选：槽位 {fifo.candidate.slot}</strong><span>最早持仓 {fifo.candidate.opened_on}。如在券商完成换仓，下一份 IBKR 报表会同步槽位记录。</span></div>
@@ -85,53 +85,126 @@ export function LeapsPage({ market, positions, portfolio, leapsCalls = [] }: {
       <div className="guardrail"><ShieldCheck size={17} /><span>禁止 TQQQ LEAPS · 未覆盖 Call 不计 PMCC</span></div>
     </section>
 
-    <LeapsHoldingsRegister
-      positions={qqqLeaps}
-      rollSources={closedById}
-      callWheels={qqqLeapsCalls}
-      marketDate={market?.as_of}
-      title="QQQ / QLD 当前持仓"
-      eyebrow="QQQ / QLD LIVE REGISTER"
-      fifoPositionId={fifo?.required ? fifo.candidate?.position_id : null}
-      emptyMessage="尚无 QQQ Call 或 QLD 持仓"
-    />
+    <div className="segmented-control leaps-view-tabs" role="tablist" aria-label="LEAPS 页面视图">
+      <button type="button" role="tab" aria-selected={view === 'signals'} aria-controls="leaps-signals-panel" className={view === 'signals' ? 'active' : ''} onClick={() => setView('signals')}><ListChecks size={15} />股票列表 / 信号 <b>{1 + clubDecisions.length}</b></button>
+      <button type="button" role="tab" aria-selected={view === 'holdings'} aria-controls="leaps-holdings-panel" className={view === 'holdings' ? 'active' : ''} onClick={() => setView('holdings')}><BriefcaseBusiness size={15} />当前持仓 <b>{leaps.length + leapsCalls.length}</b></button>
+    </div>
 
-    <ClubConsole market={market} positions={clubLeaps} rollSources={closedById} callWheels={clubLeapsCalls} sharedTarget={pmcc?.budget.individual_target ?? accountEquity * .15} />
+    {view === 'signals'
+      ? <section id="leaps-signals-panel" className="leaps-tab-panel" role="tabpanel" aria-label="股票列表与信号">
+        <LeapsSignalStockList market={market} decisions={clubDecisions} />
+      </section>
+      : <section id="leaps-holdings-panel" className="leaps-tab-panel" role="tabpanel" aria-label="当前持仓">
+        <LeapsHoldingsRegister
+          positions={qqqLeaps}
+          rollSources={closedById}
+          callWheels={qqqLeapsCalls}
+          marketDate={market?.as_of}
+          title="QQQ / QLD 当前持仓"
+          eyebrow="QQQ / QLD LIVE REGISTER"
+          fifoPositionId={fifo?.required ? fifo.candidate?.position_id : null}
+          emptyMessage="尚无 QQQ Call 或 QLD 持仓"
+        />
+
+        <ClubConsole market={market} positions={clubLeaps} rollSources={closedById} callWheels={clubLeapsCalls} sharedTarget={pmcc?.budget.individual_target ?? accountEquity * .15} decisions={clubDecisions} />
+      </section>}
   </div>
 }
 
-function EntrySignalBand({ market, decisions }: { market: MarketSnapshot | null; decisions: TrancheDecision[] }) {
+function LeapsSignalStockList({ market, decisions }: { market: MarketSnapshot | null; decisions: ClubEntryDecision[] }) {
+  const qqq = market?.market.qqq
   const session = market?.leaps_session
-  const commonChecks = decisions[0]?.checks ?? {}
-  const formalSignal = Boolean(market?.leaps_technical_ready) || decisions.some((decision) => decision.eligible) || Boolean(market?.leaps_fifo?.required)
-  const budgetFull = (market?.leaps_shared_budget?.available ?? 1) <= 0
-  const sessionLabel = session?.session === 'pre' ? '盘前' : session?.session === 'regular' ? '盘中' : session?.session === 'post' ? '盘后' : '不可用'
-  return <section className={`leaps-signal-band ${formalSignal ? 'active' : ''}`} aria-label="LEAPS 入场信号">
-    <div className="leaps-signal-verdict">
-      <Activity size={20} />
-      <div><span>QQQ LEAPS 入场判断</span><strong>{formalSignal ? budgetFull ? '技术条件满足，共享额度已满' : '条件满足，可评估 1 个槽位' : market ? '条件未完全满足' : '等待手动刷新行情'}</strong><small>{budgetFull && formalSignal ? '保留信号，请自行决定 FIFO' : '同一交易日最多执行 1 次新开仓或 FIFO 替换'}</small></div>
+  const qqqDecision = market?.leaps?.find((decision) => decision.tranche === 1)
+  const qqqPrice = session?.price ?? qqq?.price ?? null
+  const qqqChange = session?.change_fraction
+    ?? (session?.previous_close && qqq?.price != null && session.previous_close !== qqq.price
+      ? qqq.price / session.previous_close - 1
+      : null)
+  const qqqReady = Boolean(market && (market.leaps_technical_ready || qqqDecision?.eligible))
+  const qqqRow = {
+    symbol: 'QQQ',
+    name: 'Invesco QQQ',
+    price: qqqPrice,
+    change: qqqChange,
+    ma200: qqq?.ma200 ?? null,
+    rsi14: qqq?.rsi14 ?? null,
+    signal: qqqReady ? '已触发' : market ? '未触发' : '等待行情',
+    signalTone: qqqReady ? 'ready' : market ? 'waiting' : 'unavailable',
+    note: qqqReady ? session?.price == null ? '满足条件 · 使用完成日线缓存' : '满足 QQQ LEAPS 入场条件' : market ? '等待完整技术条件' : '等待行情刷新',
+  }
+  const rows = [
+    qqqRow,
+    ...[...decisions]
+      .sort((left, right) => sortByDailyDrop(clubChange(left), clubChange(right)) || left.symbol.localeCompare(right.symbol))
+      .map((decision) => {
+        const change = clubChange(decision)
+        return {
+          symbol: decision.symbol,
+          name: decision.name,
+          price: decision.current_price ?? decision.close,
+          change,
+          ma200: decision.ma200,
+          rsi14: decision.rsi14,
+          signal: decision.eligible ? '已触发' : decision.technical_eligible ? '技术满足' : '未触发',
+          signalTone: decision.eligible ? 'ready' : decision.technical_eligible ? 'partial' : 'waiting',
+          note: decision.eligible
+            ? decision.suggested_slot ? `可评估槽位 ${decision.suggested_slot}` : '满足个股 LEAPS 条件'
+            : decision.over_shared_budget ? '共享额度已满' : '等待完整技术条件',
+        }
+      }),
+  ]
+
+  return <section className="leaps-stock-list" aria-label="LEAPS 股票列表">
+    <header>
+      <div className="section-title"><div><p>WATCHLIST SIGNALS</p><h2>股票列表 / 信号</h2></div><span>QQQ 置顶 · 万亿俱乐部按当日跌幅排序</span></div>
+    </header>
+    <div className="leaps-stock-table" role="table" aria-label="LEAPS 股票信号列表">
+      <div className="leaps-stock-row head" role="row">
+        <span role="columnheader">股票</span><span role="columnheader">当前价</span><span role="columnheader">日涨跌</span><span role="columnheader">MA200</span><span role="columnheader">RSI14</span><span role="columnheader">LEAPS 信号</span><span role="columnheader">说明</span>
+      </div>
+      {rows.map((row) => <div className="leaps-stock-row" role="row" key={row.symbol}>
+        <div className="leaps-stock-name" role="cell"><strong>{row.symbol}</strong><small>{row.name}</small></div>
+        <strong role="cell">{formatStockPrice(row.price)}</strong>
+        <strong role="cell" className={row.change != null && row.change < 0 ? 'negative' : row.change != null ? 'positive' : ''}>{formatStockChange(row.change)}</strong>
+        <span role="cell">{formatStockPrice(row.ma200)}</span>
+        <span role="cell">{formatStockRsi(row.rsi14)}</span>
+        <span role="cell" className={`leaps-stock-status ${row.signalTone}`}>{row.signal}</span>
+        <small role="cell" className="leaps-stock-note">{row.note}</small>
+      </div>)}
     </div>
-    <SignalMetric label="完成日线" primary={market ? `完成收盘 ${formatMoney(market.market.qqq.price)}` : '等待行情'} secondary={market ? `SMA200 ${formatMoney(market.market.qqq.ma200)}` : '使用已完成交易日'} pass={commonChecks.above_ma200} />
-    <SignalMetric label="动能过滤" primary={market ? `RSI14 ${market.market.qqq.rsi14.toFixed(1)}` : 'RSI14 —'} secondary="要求 RSI14 < 45" pass={commonChecks.rsi_below_45} />
-    <SignalMetric label={`${sessionLabel}行情`} primary={session?.price != null ? `当前 ${formatMoney(session.price)}` : '当前价不可用'} secondary={session?.change_fraction != null ? formatPercent(session.change_fraction) : '跌幅不可计算'} pass={commonChecks.daily_drop && commonChecks.live_quote} />
-    <SignalMetric label="当日频率" primary={commonChecks.daily_limit === false ? '同一交易日已执行' : '同一交易日尚未执行'} secondary={session?.market_date ?? market?.as_of ?? '等待行情日期'} pass={commonChecks.daily_limit} />
   </section>
 }
 
-function SignalMetric({ label, primary, secondary, pass = false }: { label: string; primary: string; secondary: string; pass?: boolean }) {
-  return <div className={`leaps-signal-metric ${pass ? 'pass' : ''}`}><span>{label}</span><strong>{primary}</strong><small>{pass ? <Check size={12} /> : <ArrowDownRight size={12} />}{secondary}</small></div>
+function sortByDailyDrop(left: number | null, right: number | null) {
+  return (left ?? Number.POSITIVE_INFINITY) - (right ?? Number.POSITIVE_INFINITY)
 }
 
-function ClubConsole({ market, positions, rollSources, callWheels, sharedTarget }: {
+function clubChange(decision: ClubEntryDecision) {
+  return decision.change_fraction ?? (decision.previous_close > 0 ? decision.close / decision.previous_close - 1 : null)
+}
+
+function formatStockPrice(value: number | null | undefined) {
+  return value == null ? '—' : formatMoney(value)
+}
+
+function formatStockChange(value: number | null | undefined) {
+  return value == null ? '—' : formatPercent(value)
+}
+
+function formatStockRsi(value: number | null | undefined) {
+  return value == null ? '—' : value.toFixed(1)
+}
+
+function ClubConsole({ market, positions, rollSources, callWheels, sharedTarget, decisions }: {
   market: MarketSnapshot | null
   positions: Position[]
   rollSources: Map<number, Position>
   callWheels: OtherHolding[]
   sharedTarget: number
+  decisions: ClubEntryDecision[]
 }) {
   const shared = market?.pmcc?.individual
-  const visibleDecisions = (market?.leaps_club?.decisions ?? []).filter((decision) => !isExcludedClubSymbol(decision.symbol))
-  const weeklyOpen = visibleDecisions.every((decision) => decision.checks.weekly_limit !== false)
+  const weeklyOpen = decisions.every((decision) => decision.checks.weekly_limit !== false)
   return <section className="club-console" aria-label="万亿俱乐部 LEAPS">
     <div className="club-rule-band">
       <div><Building2 size={17} /><span>资格门槛</span><strong>公开市值 ≥ $1T</strong><small>至少 252 个完成交易日</small></div>
@@ -188,7 +261,7 @@ function LeapsSymbolCluster({ cluster, rollSources, marketDate, fifoPositionId }
       <div><span>UNDERLYING STRATEGY CLUSTER</span><h3>{cluster.symbol}</h3></div>
       <span>{sorted.length ? `${sorted.length} 笔 Long` : '无 Long'}{cluster.calls.length ? ` · ${activeCalls} 笔活动 Short Call` : ''}</span>
     </header>
-    {sorted.length > 0 && <div className="leaps-lot-list">{sorted.map((position) => <LeapsPositionCard position={position} rolledFrom={position.rolled_from_position_id ? rollSources.get(position.rolled_from_position_id) : undefined} marketDate={marketDate} fifoCandidate={position.id === fifoPositionId} key={position.id} />)}</div>}
+    {sorted.length > 0 && <div className="leaps-lot-list">{sorted.map((position) => <LeapsPositionCard position={position} rolledFrom={position.rolled_from_position_id ? rollSources.get(position.rolled_from_position_id) : undefined} rollSources={rollSources} marketDate={marketDate} fifoCandidate={position.id === fifoPositionId} key={position.id} />)}</div>}
     <LeapsCallWheelRegister calls={cluster.calls} />
   </section>
 }
@@ -196,9 +269,10 @@ function LeapsSymbolCluster({ cluster, rollSources, marketDate, fifoPositionId }
 function LeapsCallWheelRegister({ calls }: { calls: OtherHolding[] }) {
   const active = calls.filter((call) => call.status === 'open')
   const history = calls.filter((call) => call.status !== 'open')
+  const realizedProfit = history.reduce((total, call) => total + (call.realized_profit ?? 0), 0)
   if (!calls.length) return null
   return <section className="leaps-call-wheel-register" aria-label="PMCC Short Call">
-    <header><div><p>PMCC CASH FLOW</p><h3>PMCC Short Call</h3></div><span>{active.length} 笔活动{history.length ? ` · ${history.length} 笔历史` : ''}</span></header>
+    <header><div><p>PMCC CASH FLOW</p><h3>PMCC Short Call</h3></div><span>{active.length} 笔活动{history.length ? ` · ${history.length} 笔历史` : ''} · 累计已实现盈亏 {formatMoney(realizedProfit)}</span></header>
     {active.map((call) => <LeapsCallWheelCard call={call} key={call.id} />)}
     {history.length > 0 && <details><summary>查看已平仓 Sell Call（{history.length} 笔）</summary>{history.map((call) => <LeapsCallWheelCard call={call} key={call.id} />)}</details>}
   </section>
@@ -235,7 +309,7 @@ function groupBySymbol(positions: Position[], calls: OtherHolding[]) {
   return [...groups.values()]
 }
 
-function LeapsPositionCard({ position, rolledFrom, marketDate, fifoCandidate }: { position: Position; rolledFrom?: Position; marketDate?: string; fifoCandidate: boolean }) {
+function LeapsPositionCard({ position, rolledFrom, rollSources, marketDate, fifoCandidate }: { position: Position; rolledFrom?: Position; rollSources: Map<number, Position>; marketDate?: string; fifoCandidate: boolean }) {
   const cost = position.entry_price * position.quantity * position.multiplier
   const returnFraction = position.exit_decision?.return_fraction
     ?? (position.unrealized_profit == null || cost <= 0 ? null : position.unrealized_profit / cost)
@@ -245,6 +319,8 @@ function LeapsPositionCard({ position, rolledFrom, marketDate, fifoCandidate }: 
   const quote = isEquity ? position.current_price : position.quote_bid ?? position.current_price
   const heldDays = position.exit_decision?.days_held ?? daysBetween(position.opened_on, marketDate)
   const dte = position.exit_decision?.dte ?? daysUntil(position.expiration, marketDate)
+  const accumulatedRealized = rolledFrom ? sumHistoricalRealizedProfit(rolledFrom, rollSources) : 0
+  const historicalRollCount = rolledFrom ? countHistoricalRolls(rolledFrom, rollSources) : 0
   return <article className={`leaps-lot ${actionable ? 'exit-ready' : ''} ${fifoCandidate ? 'fifo-candidate' : ''}`} aria-label={`LEAPS 持仓 ${position.id}`}>
     <header>
       <div><span>槽位 {position.tranche ?? '—'} · {isEquity ? 'QLD 平替仓' : isClubPosition(position) ? '万亿俱乐部' : 'QQQ LEAPS'}</span><h3><b className="lot-symbol">{position.symbol}</b>{isEquity ? '正股' : `$${position.strike} Call`} #{position.id}</h3></div>
@@ -261,33 +337,49 @@ function LeapsPositionCard({ position, rolledFrom, marketDate, fifoCandidate }: 
     </div>
 
     {rolledFrom
-      ? <LeapsRollSummary position={position} rolledFrom={rolledFrom} />
+      ? <LeapsRollSummary position={position} rolledFrom={rolledFrom} accumulatedRealized={accumulatedRealized} historicalRollCount={historicalRollCount} />
       : position.rolled_from_position_id && <div className="leaps-roll-link"><RefreshCw size={16} /><div><span>展期关系</span><strong>由持仓 #{position.rolled_from_position_id} 展期至当前合约</strong></div></div>}
 
-    <div className={`leaps-exit-monitor ${actionable ? 'actionable' : ''}`}>
-      <TrendingUp size={17} />
-      <div><span>{actionable ? '退出动作' : '退出监控'}</span><strong>{exitLabel(position)}</strong><small>{returnFraction == null ? '收益率等待报价' : `当前收益 ${formatPercent(returnFraction)}`} · 已持有 {heldDays} 天</small></div>
-    </div>
   </article>
 }
 
-function LeapsRollSummary({ position, rolledFrom }: { position: Position; rolledFrom: Position }) {
+function LeapsRollSummary({ position, rolledFrom, accumulatedRealized, historicalRollCount }: { position: Position; rolledFrom: Position; accumulatedRealized: number; historicalRollCount: number }) {
   const contractQuantity = position.quantity
   const netDebit = (position.entry_price - rolledFrom.current_price) * contractQuantity * position.multiplier
   const realized = rolledFrom.realized_profit ?? 0
   const netLabel = netDebit >= 0 ? '净支出' : '净收入'
-  return <section className="leaps-roll-summary" aria-label={`${position.symbol} 展期记录 ${rolledFrom.id} 到 ${position.id}`}>
-    <div className="leaps-roll-heading">
-      <RefreshCw size={16} />
-      <div><span>展期记录 · {rolledFrom.closed_on ?? position.opened_on}</span><strong>旧合约已平仓，已实现盈亏保留在本次轮动中</strong></div>
-    </div>
+  return <details className="leaps-roll-summary" aria-label={`${position.symbol} 展期记录 ${rolledFrom.id} 到 ${position.id}`}>
+    <summary className="leaps-roll-heading">
+      <ChevronRight size={16} className="leaps-roll-chevron" />
+      <div><span>LEAPS 历史展期</span><strong>查看已平仓展期记录（{historicalRollCount} 笔） · 累计已实现盈亏 {formatMoney(accumulatedRealized)}</strong></div>
+    </summary>
     <div className="leaps-roll-metrics">
       <div><span>展期前合约</span><strong>{rolledFrom.expiration ?? '—'} ${rolledFrom.strike ?? '—'} Call</strong><small>持仓 #{rolledFrom.id} → #{position.id}</small></div>
       <div><span>旧腿平仓</span><strong>平仓 {formatMoney(rolledFrom.current_price)}</strong><small>原权利金 {formatMoney(rolledFrom.entry_price)}</small></div>
-      <div><span>旧腿损益</span><strong className={realized < 0 ? 'negative' : 'positive'}>已实现 {formatMoney(realized)}</strong><small>已计入 LEAPS 已实现流水</small></div>
-      <div><span>展期资金</span><strong className={netDebit < 0 ? 'positive' : ''}>{netLabel} {formatMoney(Math.abs(netDebit))}</strong><small>新权利金 {formatMoney(position.entry_price)}</small></div>
+      <div><span>旧腿损益</span><strong>已实现 {formatMoney(realized)}</strong><small>已计入 LEAPS 已实现流水</small></div>
+      <div><span>展期资金</span><strong>{netLabel} {formatMoney(Math.abs(netDebit))}</strong><small>新权利金 {formatMoney(position.entry_price)}</small></div>
     </div>
-  </section>
+  </details>
+}
+
+function sumHistoricalRealizedProfit(source: Position, rollSources: Map<number, Position>) {
+  return historicalRolls(source, rollSources).reduce((total, position) => total + (position.realized_profit ?? 0), 0)
+}
+
+function countHistoricalRolls(source: Position, rollSources: Map<number, Position>) {
+  return historicalRolls(source, rollSources).length
+}
+
+function historicalRolls(source: Position, rollSources: Map<number, Position>) {
+  const history: Position[] = []
+  let current: Position | undefined = source
+  const visited = new Set<number>()
+  while (current && !visited.has(current.id)) {
+    visited.add(current.id)
+    history.push(current)
+    current = current.rolled_from_position_id ? rollSources.get(current.rolled_from_position_id) : undefined
+  }
+  return history
 }
 
 function LotMetric({ label, value, tone = '' }: { label: string; value: string; tone?: string }) {
@@ -317,15 +409,6 @@ function isClubPosition(position: Position) {
 
 function isExcludedClubSymbol(symbol: string) {
   return CLUB_DISPLAY_EXCLUSIONS.has(symbol.toUpperCase())
-}
-
-function exitLabel(position: Position) {
-  const decision = position.exit_decision
-  if (!decision) return '等待刷新'
-  if (decision.code === 'force_exit') return '持仓超过 270 天，强制平仓'
-  if (decision.code === 'take_profit') return `达到 ${((decision.target_return ?? 0) * 100).toFixed(0)}% 止盈线`
-  if (decision.code === 'quote_unavailable') return '报价不可用，仅按持仓天数监控'
-  return `继续持有 · 目标 ${((decision.target_return ?? 0) * 100).toFixed(0)}%`
 }
 
 function daysUntil(value: string | null, asOf?: string) {

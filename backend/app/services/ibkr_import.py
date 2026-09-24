@@ -141,8 +141,12 @@ class PositionRoll:
 class IbkrImportService:
     def __init__(self, session: Session) -> None:
         self.session = session
+        self._preview_pmcc_allocations: dict[int, Decimal] = {}
 
     def preview(self, filename: str, content: str) -> dict[str, Any]:
+        # Preview rows are built before they are applied, so reserve coverage
+        # locally to keep multiple short calls from selecting the same LEAPS.
+        self._preview_pmcc_allocations = {}
         rows = parse_activity_statement(content)
         if not rows:
             raise ValueError("未识别到 IBKR Activity Statement CSV 数据行")
@@ -2102,6 +2106,7 @@ class IbkrImportService:
                     )
                 )
             )
+        candidates.sort(key=lambda candidate: (candidate.opened_on, candidate.id))
         available: list[PositionRecord] = []
         for candidate in candidates:
             coverable = (
@@ -2116,9 +2121,17 @@ class IbkrImportService:
                     UnmanagedPositionRecord.linked_position_id == candidate.id,
                 )
             ) or ZERO
-            if coverable - Decimal(str(used)) >= Decimal(contracts):
+            reserved = self._preview_pmcc_allocations.get(candidate.id, ZERO)
+            if coverable - Decimal(str(used)) - reserved >= Decimal(contracts):
                 available.append(candidate)
-        return available[0] if len(available) == 1 else None
+        if not available:
+            return None
+        selected = available[0]
+        self._preview_pmcc_allocations[selected.id] = (
+            self._preview_pmcc_allocations.get(selected.id, ZERO)
+            + Decimal(contracts)
+        )
+        return selected
 
     def _matching_unmanaged(
         self, contract: Contract, direction: str

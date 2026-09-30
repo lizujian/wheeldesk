@@ -3,10 +3,9 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import App from './App'
+import App, { MARKET_CACHE_KEY, selectPmccCalls } from './App'
 import { AppShell } from './components/AppShell'
-import type { MarketSnapshot } from './lib/types'
-import { MARKET_CACHE_KEY } from './App'
+import type { MarketSnapshot, OtherHolding, OtherHoldingListing } from './lib/types'
 
 const cachedMarket: MarketSnapshot = {
   source: 'yahoo', as_of: '2026-09-23', stale: false,
@@ -32,6 +31,26 @@ const cachedMarket: MarketSnapshot = {
 
 describe('App', () => {
   beforeEach(() => { vi.spyOn(window, 'scrollTo').mockImplementation(() => {}); window.localStorage.clear() })
+
+  it('selects PMCC calls by explicit strategy link instead of matching ticker', () => {
+    const makeCall = (id: number, overrides: Partial<OtherHolding>): OtherHolding => ({
+      id, category: 'other', symbol: 'AVGO', asset_type: 'option', direction: 'short', option_type: 'call',
+      quantity: 1, multiplier: 100, entry_price: 5, current_price: 5, current_value: -500, absolute_value: 500,
+      unrealized_profit: 0, opened_on: '2026-09-25', expiration: '2026-10-23', strike: 400, status: 'open',
+      closed_on: null, exit_price: null, realized_profit: null, quote_source: 'ibkr_statement', quote_as_of: null,
+      quote_status: 'updated', last_error: null, ...overrides,
+    })
+    const listing: OtherHoldingListing = {
+      records: [makeCall(3, {}), makeCall(4, { linked_position_id: 31 })],
+      total_value: 0, cash_equivalent_value: 0, other_value: 0, unpriced_count: 0,
+      leaps_call_wheels: [
+        makeCall(1, { category: 'leaps_call_wheel', linked_position_id: 31 }),
+        makeCall(2, { category: 'leaps_call_wheel', linked_position_id: 32 }),
+      ],
+    }
+
+    expect(selectPmccCalls(listing).map((call) => call.id)).toEqual([1, 2, 4])
+  })
 
   it('renders the operating-console destinations without manual ledger modules', () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')))
@@ -95,5 +114,35 @@ describe('App', () => {
 
     const list = await screen.findByRole('region', { name: 'LEAPS 股票列表' })
     expect(within(list).getByRole('row', { name: /AAPL/ })).toBeInTheDocument()
+  })
+
+  it('keeps the cached trillion-club watchlist when refresh returns an empty club snapshot', async () => {
+    window.localStorage.setItem(MARKET_CACHE_KEY, JSON.stringify(cachedMarket))
+    const refreshedMarket: MarketSnapshot = {
+      ...cachedMarket,
+      as_of: '2026-09-24',
+      leaps_club: { decisions: [], unavailable: [{ symbol: 'AAPL', name: 'Apple', error: '行情暂时不可用' }], exclusions: [] },
+    }
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      if (String(input).endsWith('/api/market/refresh')) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => refreshedMarket } as Response)
+      }
+      return Promise.reject(new Error('offline'))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+    render(
+      <MemoryRouter initialEntries={['/leaps']}>
+        <App />
+      </MemoryRouter>,
+    )
+
+    const list = await screen.findByRole('region', { name: 'LEAPS 股票列表' })
+    expect(within(list).getByRole('row', { name: /AAPL/ })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '刷新行情' }))
+
+    expect(within(list).getByRole('row', { name: /AAPL/ })).toBeInTheDocument()
+    expect(JSON.parse(window.localStorage.getItem(MARKET_CACHE_KEY) ?? '{}').leaps_club.decisions).toHaveLength(1)
   })
 })

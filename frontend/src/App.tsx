@@ -4,7 +4,7 @@ import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { AppShell } from './components/AppShell'
 import { SignalBanner } from './components/SignalBanner'
 import { api } from './lib/api'
-import type { MarketSnapshot, OtherHoldingListing, PortfolioSummary, Position, Signal, WheelOverview } from './lib/types'
+import type { MarketSnapshot, OtherHolding, OtherHoldingListing, PortfolioSummary, Position, Signal, WheelOverview } from './lib/types'
 
 const OverviewPage = lazy(() => import('./pages/OverviewPage').then((module) => ({ default: module.OverviewPage })))
 const CorePage = lazy(() => import('./pages/CorePage').then((module) => ({ default: module.CorePage })))
@@ -52,6 +52,31 @@ function writeCachedMarket(snapshot: MarketSnapshot) {
   try { window.localStorage.setItem(MARKET_CACHE_KEY, JSON.stringify(snapshot)) } catch { /* localStorage may be unavailable */ }
 }
 
+export function mergeMarketSnapshot(previous: MarketSnapshot | null, next: MarketSnapshot): MarketSnapshot {
+  const previousClub = previous?.leaps_club
+  const nextClub = next.leaps_club
+  if (!previousClub?.decisions.length || nextClub?.decisions.length) return next
+
+  return {
+    ...next,
+    stale: true,
+    leaps_club: nextClub
+      ? { ...nextClub, decisions: previousClub.decisions }
+      : previousClub,
+  }
+}
+
+export function selectPmccCalls(listing: OtherHoldingListing): OtherHolding[] {
+  return [...new Map([
+    ...(listing.leaps_call_wheels ?? []),
+    ...listing.records.filter((record) =>
+      record.asset_type === 'option'
+      && record.direction === 'short'
+      && record.option_type === 'call'
+      && record.linked_position_id != null),
+  ].map((call) => [call.id, call])).values()]
+}
+
 function clearCachedMarket() {
   try { window.localStorage.removeItem(MARKET_CACHE_KEY) } catch { /* localStorage may be unavailable */ }
 }
@@ -85,21 +110,11 @@ export default function App() {
   }, [])
 
   useEffect(() => { void load() }, [load])
-  const refresh = async () => { setRefreshing(true); try { const nextMarket = await api.refresh(); setMarket(nextMarket); writeCachedMarket(nextMarket); await load() } catch (reason) { setError(reason instanceof Error ? reason.message : '刷新失败') } finally { setRefreshing(false) } }
+  const refresh = async () => { setRefreshing(true); try { const nextMarket = mergeMarketSnapshot(market, await api.refresh()); setMarket(nextMarket); writeCachedMarket(nextMarket); await load() } catch (reason) { setError(reason instanceof Error ? reason.message : '刷新失败') } finally { setRefreshing(false) } }
   const resetAll = async () => { try { await api.post('/system/reset', { confirmation: 'RESET' }); clearCachedMarket(); setMarket(null); await load(); setError('') } catch (reason) { setError(reason instanceof Error ? reason.message : '重置失败'); throw reason } }
   const activeSignals = signals.filter((signal) => !signal.acknowledged)
   const criticalSignalCount = activeSignals.filter((signal) => signal.severity === 'critical').length
-  const activeLeapsSymbols = new Set(positionHistory
-    .filter((position) => position.bucket === 'leaps' && position.status === 'open')
-    .map((position) => position.symbol))
-  const pmccCalls = [...new Map([
-    ...(otherHoldings.leaps_call_wheels ?? []),
-    ...otherHoldings.records.filter((record) =>
-      record.asset_type === 'option'
-      && record.direction === 'short'
-      && record.option_type === 'call'
-      && activeLeapsSymbols.has(record.symbol)),
-  ].map((call) => [call.id, call])).values()]
+  const pmccCalls = selectPmccCalls(otherHoldings)
   return (
     <AppShell market={market} refreshing={refreshing} onRefresh={() => void refresh()} signalCount={activeSignals.length} criticalSignalCount={criticalSignalCount}>
       {error && <div className="error-toast" role="alert">{error}<button onClick={() => setError('')}>关闭</button></div>}
@@ -110,7 +125,7 @@ export default function App() {
         <Route path="/wheel" element={<Navigate replace to="/other-holdings" />} />
         <Route path="/wheel/history" element={<Navigate replace to="/other-holdings" />} />
         <Route path="/leaps" element={<LeapsPage market={market} positions={positionHistory} portfolio={portfolio} leapsCalls={pmccCalls} />} />
-        <Route path="/other-holdings" element={<OtherHoldingsPage listing={otherHoldings} wheel={wheel} pmccSymbols={[...activeLeapsSymbols]} />} />
+        <Route path="/other-holdings" element={<OtherHoldingsPage listing={otherHoldings} wheel={wheel} />} />
         <Route path="/imports/ibkr" element={<IbkrImportPage onImported={load} />} />
         <Route path="/signals" element={<SignalsPage signals={signals} onAcknowledge={async (id) => { await api.post(`/signals/${id}/acknowledge`, {}); await load() }} />} />
         <Route path="/settings" element={<SettingsPage portfolio={portfolio} market={market} onReset={resetAll} />} />

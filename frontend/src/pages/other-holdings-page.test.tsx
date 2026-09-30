@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 
-import type { OtherHoldingListing, WheelOverview } from '../lib/types'
+import type { OtherHolding, OtherHoldingListing, WheelOverview } from '../lib/types'
 import { OtherHoldingsPage } from './OtherHoldingsPage'
 
 const listing: OtherHoldingListing = {
@@ -116,7 +116,7 @@ describe('other holdings page', () => {
   })
 
   it('keeps Wheel transition puts in the current holdings report without extra sections', () => {
-    render(<OtherHoldingsPage listing={listing} wheel={wheelWithTransition} pmccSymbols={['AVGO']} />)
+    render(<OtherHoldingsPage listing={listing} wheel={wheelWithTransition} />)
 
     expect(screen.getByRole('heading', { name: '其他持仓与过渡仓' })).toBeInTheDocument()
     expect(screen.queryByRole('region', { name: 'Wheel 过渡仓' })).not.toBeInTheDocument()
@@ -124,7 +124,7 @@ describe('other holdings page', () => {
     expect(screen.queryByRole('article', { name: 'AVGO Sell Call #5' })).not.toBeInTheDocument()
     expect(screen.queryAllByText(/权利金总额/)).toHaveLength(1)
     expect(screen.queryByText('PMCC Short Call')).not.toBeInTheDocument()
-    expect(screen.queryByRole('row', { name: 'AVGO 2026-10-23 $400 Call' })).not.toBeInTheDocument()
+    expect(screen.getByRole('row', { name: 'AVGO 2026-10-23 $400 Call' })).toHaveTextContent('其他')
     expect(screen.queryByText('Sell Put 开仓条件')).not.toBeInTheDocument()
     expect(screen.getByRole('row', { name: 'Wheel 过渡仓 AVGO Sell Put #8' })).toBeInTheDocument()
     const transitionRow = screen.getByRole('row', { name: 'Wheel 过渡仓 AVGO Sell Put #8' })
@@ -132,5 +132,28 @@ describe('other holdings page', () => {
     expect(transitionRow).toHaveTextContent('共收 $600.00')
     expect(screen.queryByText('LIVE TRANSITION REGISTER')).not.toBeInTheDocument()
     expect(screen.queryByRole('article', { name: /个股策略簇/ })).not.toBeInTheDocument()
+  })
+
+  it('shows the AVGO call covered by 100 shares as a Wheel call, separate from PMCC', () => {
+    const avgoShares: OtherHolding = {
+      id: 7, category: 'other', symbol: 'AVGO', asset_type: 'equity', direction: 'long', option_type: null,
+      quantity: 100, multiplier: 1, entry_price: 350, current_price: 400, current_value: 40000, absolute_value: 40000,
+      unrealized_profit: 5000, opened_on: '2026-09-24', expiration: null, strike: null, status: 'open', closed_on: null,
+      exit_price: null, realized_profit: null, quote_source: 'ibkr_statement', quote_as_of: '2026-09-25',
+      quote_status: 'updated', last_error: null,
+    }
+    const secondAvgoCall: OtherHolding = {
+      ...listing.records.find((record) => record.id === 5)!,
+      id: 8, opened_on: '2026-09-23', expiration: '2026-11-20', strike: 420,
+    }
+    const listingWithAvgoShares = { ...listing, records: [...listing.records, avgoShares, secondAvgoCall] }
+    render(<OtherHoldingsPage listing={listingWithAvgoShares} wheel={wheel} />)
+
+    const callRow = screen.getByRole('row', { name: 'AVGO 2026-10-23 $400 Call' })
+    expect(callRow).toHaveTextContent('Wheel Covered Call')
+    expect(callRow).toHaveTextContent('100 股 AVGO 覆盖')
+    expect(screen.getByRole('row', { name: 'AVGO 2026-11-20 $420 Call' })).toHaveTextContent('其他')
+    expect(screen.getByRole('row', { name: 'AVGO' })).toHaveTextContent('Wheel 持股')
+    expect(screen.getByRole('row', { name: 'AVGO' })).toHaveTextContent('覆盖 1 张 Sell Call')
   })
 })

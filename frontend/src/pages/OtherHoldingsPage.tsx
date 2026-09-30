@@ -19,22 +19,21 @@ import type { OtherHolding, OtherHoldingListing, WheelOverview, WheelPutLot, Whe
 import './WheelPage.css'
 import './OtherHoldingsPage.css'
 
-export function OtherHoldingsPage({ listing, wheel, pmccSymbols = [] }: {
+export function OtherHoldingsPage({ listing, wheel }: {
   listing: OtherHoldingListing
   wheel?: WheelOverview
-  pmccSymbols?: string[]
 }) {
   const [tab, setTab] = useState<'open' | 'closed'>('open')
-  const pmccSymbolSet = useMemo(() => new Set(pmccSymbols), [pmccSymbols])
   const transitionPuts = useMemo(() => wheel
     ? wheel.rounds.flatMap((round) => round.puts
       .filter(putHasLiveExposure)
       .map((put) => ({ put, round })))
     : [], [wheel])
   const visibleRecords = useMemo(
-    () => listing.records.filter((record) => !(isSellCall(record) && isPmccCall(record, pmccSymbolSet))),
-    [listing.records, pmccSymbolSet],
+    () => listing.records.filter((record) => !isPmccCall(record)),
+    [listing.records],
   )
+  const wheelCoverage = useMemo(() => findShareCoveredCalls(visibleRecords), [visibleRecords])
   const records = useMemo(
     () => visibleRecords.filter((record) => record.status === tab),
     [visibleRecords, tab],
@@ -78,7 +77,13 @@ export function OtherHoldingsPage({ listing, wheel, pmccSymbols = [] }: {
           <span>分类 / 标的</span><span>方向</span><span>数量</span><span>平均成本</span><span>{tab === 'open' ? '当前价格' : '退出价格'}</span><span>{tab === 'open' ? '当前价值' : '已实现盈亏'}</span><span>{tab === 'open' ? '未实现盈亏' : '退出日期'}</span><span>数据状态</span>
         </div>
         {tab === 'open' && transitionPuts.map(({ put, round }) => <TransitionPutRow key={`wheel-${put.id}`} put={put} round={round} />)}
-        {records.map((record) => <HoldingRow key={record.id} record={record} />)}
+        {records.map((record) => <HoldingRow
+          key={record.id}
+          record={record}
+          wheelCoveredShares={wheelCoverage.calls.get(record.id) ?? 0}
+          wheelCoveredCallCount={wheelCoverage.shares.get(record.id)?.callCount ?? 0}
+          wheelShareCoverage={wheelCoverage.shares.get(record.id)?.shareCount ?? 0}
+        />)}
       </div> : <div className="other-empty"><PackageOpen size={26} /><strong>{tab === 'open' ? '报表中没有策略外持仓' : '尚无退出记录'}</strong></div>}
     </section>
   </div>
@@ -139,19 +144,68 @@ function isSellCall(record: OtherHolding) {
   return record.asset_type === 'option' && record.direction === 'short' && record.option_type === 'call'
 }
 
-function isPmccCall(record: OtherHolding, pmccSymbols: ReadonlySet<string>) {
+function isPmccCall(record: OtherHolding) {
   if (!isSellCall(record)) return false
-  return record.category === 'leaps_call_wheel' || record.category === 'pmcc' || record.linked_position_id != null || pmccSymbols.has(record.symbol)
+  return record.category === 'leaps_call_wheel' || record.category === 'pmcc' || record.linked_position_id != null
 }
 
-function HoldingRow({ record }: { record: OtherHolding }) {
+function findShareCoveredCalls(records: OtherHolding[]) {
+  const sharesBySymbol = new Map<string, Array<{ id: number; available: number }>>()
+  for (const record of records) {
+    if (record.status !== 'open' || record.asset_type !== 'equity' || record.direction !== 'long') continue
+    const shares = sharesBySymbol.get(record.symbol) ?? []
+    shares.push({ id: record.id, available: record.quantity })
+    sharesBySymbol.set(record.symbol, shares)
+  }
+
+  const calls = new Map<number, number>()
+  const shares = new Map<number, { shareCount: number; callCount: number }>()
+  const shortCalls = records
+    .filter((record) => record.status === 'open' && isSellCall(record))
+    .sort((left, right) => (left.opened_on ?? '').localeCompare(right.opened_on ?? '') || left.id - right.id)
+
+  for (const call of shortCalls) {
+    const lots = sharesBySymbol.get(call.symbol) ?? []
+    const requiredShares = call.quantity * call.multiplier
+    if (lots.reduce((total, lot) => total + lot.available, 0) < requiredShares) continue
+
+    let remaining = requiredShares
+    for (const lot of lots) {
+      const allocated = Math.min(lot.available, remaining)
+      if (!allocated) continue
+      lot.available -= allocated
+      const coverage = shares.get(lot.id) ?? { shareCount: 0, callCount: 0 }
+      coverage.shareCount += allocated
+      coverage.callCount += allocated / call.multiplier
+      shares.set(lot.id, coverage)
+      remaining -= allocated
+      if (!remaining) break
+    }
+    calls.set(call.id, requiredShares)
+  }
+
+  return { calls, shares }
+}
+
+function HoldingRow({ record, wheelCoveredShares = 0, wheelCoveredCallCount = 0, wheelShareCoverage = 0 }: {
+  record: OtherHolding
+  wheelCoveredShares?: number
+  wheelCoveredCallCount?: number
+  wheelShareCoverage?: number
+}) {
   const isOpen = record.status === 'open'
   const result = isOpen ? record.unrealized_profit : record.realized_profit
+  const isWheelCall = wheelCoveredShares > 0
+  const isWheelShare = wheelShareCoverage > 0
   return <div className="other-row" role="row" aria-label={contractLabel(record)}>
     <div className="other-instrument">
-      <span className={`other-category ${record.category}`}>{record.category === 'cash_equivalent' ? '现金等价' : '其他'}</span>
+      <span className={`other-category ${isWheelCall || isWheelShare ? 'wheel_transition' : record.category}`}>
+        {isWheelCall ? 'Wheel Covered Call' : isWheelShare ? 'Wheel 持股' : record.category === 'cash_equivalent' ? '现金等价' : '其他'}
+      </span>
       <strong>{contractLabel(record)}</strong>
       <small>{record.opened_on ?? '开仓日期未知'}{record.expiration ? ` · 到期 ${record.expiration}` : ''}</small>
+      {isWheelCall && <small className="transition-detail">由 {wheelCoveredShares} 股 {record.symbol} 覆盖</small>}
+      {isWheelShare && <small className="transition-detail">覆盖 {wheelCoveredCallCount} 张 Sell Call</small>}
     </div>
     <span className={`direction ${record.direction}`}>{directionLabel(record)}</span>
     <strong>{formatQuantity(record)}</strong>

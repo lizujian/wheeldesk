@@ -16,8 +16,15 @@ BOXX = "BOXX"
 
 
 class OtherHoldingService:
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, *, commit: bool = True) -> None:
         self.session = session
+        self._commit = commit
+
+    def _persist(self) -> None:
+        if self._commit:
+            self.session.commit()
+        else:
+            self.session.flush()
 
     def create(
         self,
@@ -54,7 +61,7 @@ class OtherHoldingService:
             status="open",
         )
         self.session.add(record)
-        self.session.commit()
+        self._persist()
         return self.payload(record)
 
     def update(
@@ -77,7 +84,7 @@ class OtherHoldingService:
             record.quote_source = "manual"
             record.quote_as_of = date.today()
             record.last_error = None
-        self.session.commit()
+        self._persist()
         return self.payload(record)
 
     def close(self, record_id: int, closed_on: date, price: Decimal) -> dict:
@@ -105,13 +112,13 @@ class OtherHoldingService:
                     profit_source="leaps",
                     note=f"{record.symbol} PMCC Short Call 平仓",
                 )
-        self.session.commit()
+        self._persist()
         return self.payload(record)
 
     def delete(self, record_id: int) -> None:
         record = self._get(record_id)
         self.session.delete(record)
-        self.session.commit()
+        self._persist()
 
     def listing(self, include_closed: bool = False) -> dict:
         statement = select(UnmanagedPositionRecord).order_by(

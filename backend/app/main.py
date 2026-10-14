@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+from app.local_security import LocalOriginMiddleware
 
 from app.api import (
     exit_positions,
@@ -31,6 +33,8 @@ async def lifespan(_: FastAPI):
         close_providers()
 
 app = FastAPI(title="Wheel Monitor", version="0.1.0", lifespan=lifespan)
+app.add_middleware(LocalOriginMiddleware)
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
 app.include_router(portfolio.router)
 app.include_router(other_holdings.router)
 app.include_router(profit_ledger.router)

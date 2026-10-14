@@ -132,6 +132,8 @@ class ProfitLedgerService:
             raise ValueError("找不到收益流水")
         if record.details.get("automatic"):
             raise ValueError("自动流水必须从来源交易中更正")
+        if record.entry_type == "allocation":
+            raise ValueError("收益分配已产生资金划转，暂不支持删除；请保留分配流水")
         source_key = record.details.get("source_key")
         if source_key:
             RealizedCashService(self.session).reverse(
@@ -260,7 +262,7 @@ class ProfitLedgerService:
                 "amount": -record.amount if record.entry_type == "allocation" else record.amount,
                 "note": record.note,
                 "automatic": bool(record.details.get("automatic")),
-                "deletable": not bool(record.details.get("automatic")),
+                "deletable": record.entry_type != "allocation" and not bool(record.details.get("automatic")),
                 "allocations": record.details.get("allocations", {}),
                 "raw_amount": record.amount,
             }

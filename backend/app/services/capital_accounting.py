@@ -119,6 +119,10 @@ class CapitalAccountingService:
             wheel.committed + leaps.committed,
         )
         total_equity = sum(balances.values(), ZERO)
+        from app.services.account_valuation import AccountValuationService
+        valuation = AccountValuationService(self.session).snapshot()
+        if valuation["broker_report_as_of"] is not None:
+            total_equity = valuation["economic_equity"]
         pmcc = pmcc_snapshot(self.session, as_of=None)
         # Keep PMCC exposure visible without adding the short-call mark to
         # committed capital; the Long LEAPS debit is already in `leaps`.

@@ -5,7 +5,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db_models import LedgerEvent, PositionRecord, WheelCallLot, WheelPutLot
+from app.db_models import LedgerEvent, PositionRecord
 from app.domain.allocation import allocation_targets
 from app.domain.core import CORE_SYMBOLS
 from app.domain.models import Bucket
@@ -36,10 +36,11 @@ class RebalancingService:
             )
         )
         core_positions = [row for row in positions if row.bucket == Bucket.CORE.value]
-        leaps_positions = [row for row in positions if row.bucket == Bucket.LEAPS.value]
-        core_unrealized = self._position_unrealized(core_positions)
-        leaps_unrealized = self._position_unrealized(leaps_positions)
-        wheel_unrealized = self._wheel_unrealized()
+        from app.services.account_valuation import AccountValuationService
+        valuation = AccountValuationService(self.session).snapshot()
+        core_unrealized = valuation["unrealized"]["core"]
+        leaps_unrealized = valuation["unrealized"]["leaps"]
+        wheel_unrealized = valuation["unrealized"]["wheel"]
 
         values = {
             Bucket.CORE: capital.core.assigned + core_unrealized,
@@ -57,7 +58,7 @@ class RebalancingService:
                 - capital.options.cash_occupancy
             ),
         }
-        total = sum(values.values(), ZERO).quantize(CENT)
+        total = valuation["economic_equity"]
         targets = allocation_targets(profile.age)
         economic_buckets = {}
         for bucket in (Bucket.CORE, Bucket.CASH):
@@ -117,6 +118,9 @@ class RebalancingService:
             "capital": capital.payload(),
             "economic": {
                 "total": total,
+                "other_unrealized": valuation["unrealized"]["other"],
+                "valuation_adjustment": valuation["valuation_adjustment"],
+                "broker_report_as_of": valuation["broker_report_as_of"],
                 "buckets": economic_buckets,
                 "unrealized": {
                     "core": core_unrealized.quantize(CENT),
@@ -147,45 +151,6 @@ class RebalancingService:
         )
         self.session.commit()
         return self.evaluate(confirmed_on)
-
-    @staticmethod
-    def _position_unrealized(positions: list[PositionRecord]) -> Decimal:
-        return sum(
-            (
-                (row.current_price - row.entry_price)
-                * row.quantity
-                * row.multiplier
-                for row in positions
-            ),
-            ZERO,
-        )
-
-    def _wheel_unrealized(self) -> Decimal:
-        puts = self.session.scalars(
-            select(WheelPutLot).where(
-                WheelPutLot.state == "open", WheelPutLot.open_quantity > 0
-            )
-        )
-        calls = self.session.scalars(
-            select(WheelCallLot).where(WheelCallLot.state == "open")
-        )
-        put_profit = sum(
-            (
-                (row.premium - row.quote_ask) * 100 * row.open_quantity
-                for row in puts
-                if row.quote_ask is not None
-            ),
-            ZERO,
-        )
-        call_profit = sum(
-            (
-                (row.premium - row.quote_ask) * 100 * row.quantity
-                for row in calls
-                if row.quote_ask is not None
-            ),
-            ZERO,
-        )
-        return put_profit + call_profit
 
     @staticmethod
     def _core_sale_reference(

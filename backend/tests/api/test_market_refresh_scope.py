@@ -159,7 +159,7 @@ def scoped_client(combined):
     for dependency in (get_market_provider, get_option_provider, get_vix_provider):
         app.dependency_overrides[dependency] = lambda: provider
     try:
-        with TestClient(app) as client:
+        with TestClient(app, base_url="http://127.0.0.1") as client:
             response = client.post("/api/portfolio/initialize", json={
                 "age": 36, "opening_equity": 100000, "opening_date": DAY.isoformat(),
             })

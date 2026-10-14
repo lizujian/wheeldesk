@@ -376,6 +376,24 @@ class CoreTradeRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class BrokerPositionSnapshot(Base):
+    """Statement chronology is independent of market quote timestamps."""
+    __tablename__ = "broker_position_snapshots"
+
+    contract_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    report_as_of: Mapped[date] = mapped_column(Date)
+
+
+class BrokerAccountSnapshot(Base):
+    __tablename__ = "broker_account_snapshots"
+
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    report_as_of: Mapped[date] = mapped_column(Date)
+    net_asset_value: Mapped[Decimal] = mapped_column(Numeric(18, 2))
+    valuation_adjustment: Mapped[Decimal] = mapped_column(Numeric(18, 2))
+    filename: Mapped[str] = mapped_column(String(255))
+
+
 class BrokerImportRecord(Base):
     __tablename__ = "broker_import_records"
 

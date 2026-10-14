@@ -38,6 +38,9 @@ export function RebalancingPage({ snapshot, onEvaluate, onAction }: {
 
     <section className="rebalance-allocation">
       <div className="section-title"><div><p>MARK-TO-MARKET</p><h2>经济权益</h2></div><span>合计 {formatMoney(snapshot.economic.total)}</span></div>
+      {(!!snapshot.economic.other_unrealized || !!snapshot.economic.valuation_adjustment) && <p className="quote-provenance">
+        其他持仓浮盈亏 {formatMoney(snapshot.economic.other_unrealized ?? 0)} · 待对账差额 {formatMoney(snapshot.economic.valuation_adjustment ?? 0)}，均不计入可用现金
+      </p>}
       <div className="rebalance-allocation-grid">
         {(Object.keys(bucketNames) as Array<keyof typeof bucketNames>).map((bucket) => {
           const row = snapshot.economic.buckets[bucket]

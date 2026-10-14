@@ -144,6 +144,26 @@ report imports requires a separate Flex Web Service integration.
    data. Reload the browser page for a full refresh, including underlying IV,
    held option quotes and per-symbol holding occupancy.
 
+Each statement import commits its business records, duplicate-detection entries,
+statement dates and account summary together. If any step fails, the entire
+import is rolled back. Older position snapshots cannot replace newer quantities,
+costs or closed states; missing historical transactions can still be reviewed and
+imported. Statement chronology is stored separately from market quote times.
+
+Automatic financial imports support USD only. Non-USD or missing-currency rows
+are flagged for review rather than treated as dollars. NAV synchronization
+requires an explicit USD base currency in the statement's Account Information
+section. It also runs for newer statements with unchanged positions or only an
+account summary.
+
+Broker NAV is an observation separate from cost-based strategy allocations and
+available cash. Unrealized P/L is counted once in economic equity. Unexplained
+NAV differences are shown as pending reconciliation and cannot fund purchases
+or profit allocations; actual deposits still require their cash-flow records.
+On database upgrade, legacy NAV-to-cash adjustments are reclassified once with
+audit entries retained. Profit allocation entries cannot currently be deleted,
+because deleting a row alone would not reverse its transfers.
+
 The allocation formula is configurable in code and currently assigns `70%` to
 core equity, `5%` to cash, and `25%` to the shared options pool. Wheel and LEAPS
 retain separate operational views, but new option capacity is reserved for the

@@ -37,6 +37,10 @@ def pmcc_snapshot(
         (row.amount for row in session.scalars(select(BucketBalance))),
         ZERO,
     )
+    from app.services.account_valuation import AccountValuationService
+    valuation = AccountValuationService(session).snapshot()
+    if valuation["broker_report_as_of"] is not None:
+        total_equity = valuation["economic_equity"]
     result = summarize_pmcc(
         build_pmcc_states(
             positions,

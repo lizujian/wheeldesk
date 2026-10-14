@@ -1,5 +1,5 @@
 from dataclasses import asdict
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -31,8 +31,14 @@ def position_payload(position: PositionRecord) -> dict:
     value = position.current_price * position.quantity * position.multiplier
     unrealized = value - cost if position.status == "open" else None
     exit_decision = None
+    as_of = date.today()
+    quote_date = position.quote_as_of.date() if position.quote_as_of else None
+    quote_current = (
+        metadata["quote_quality"] in {None, "legacy", "realtime"}
+        and not position.last_error
+        and (quote_date is None or quote_date >= as_of - timedelta(days=5))
+    )
     if position.bucket == Bucket.LEAPS.value and position.expiration is not None:
-        as_of = position.quote_as_of.date() if position.quote_as_of else date.today()
         exit_decision = asdict(
             evaluate_leaps_exit(
                 LeapsExitInputs(
@@ -40,7 +46,7 @@ def position_payload(position: PositionRecord) -> dict:
                     expiration=position.expiration,
                     as_of=as_of,
                     entry_price=position.entry_price,
-                    current_bid=position.quote_bid if metadata["quote_quality"] in {None, "legacy", "realtime"} and not position.last_error else None,
+                    current_bid=position.quote_bid if quote_current else None,
                 )
             )
         )
@@ -49,7 +55,6 @@ def position_payload(position: PositionRecord) -> dict:
         and position.asset_type == "equity"
         and position.symbol == "QLD"
     ):
-        as_of = position.quote_as_of.date() if position.quote_as_of else date.today()
         exit_decision = asdict(
             evaluate_leaps_equity_exit(
                 opened_on=position.opened_on,
@@ -58,7 +63,7 @@ def position_payload(position: PositionRecord) -> dict:
                 current_price=position.current_price,
             )
         )
-        if metadata["quote_quality"] not in {None, "legacy", "realtime"} or position.last_error:
+        if not quote_current:
             exit_decision["actionable"] = False
     return {
         "id": position.id,

@@ -7,6 +7,13 @@ bound to `127.0.0.1` by default and do not implement authentication,
 authorization, TLS termination, multi-user isolation, or internet-facing rate
 limits.
 
+The API validates `Host` against `127.0.0.1` and `localhost` to block DNS
+rebinding through arbitrary domains. Browser write requests must use the local
+frontend/API origins (default ports `5173`/`8000`, or configured `WEB_PORT`/
+`API_PORT`); opaque/untrusted origins and cross-site writes are rejected. Local
+CLI clients without browser headers remain supported. These checks do not
+authenticate local processes or make the service suitable for remote hosting.
+
 Do not expose ports `5173` or `8000` to a LAN or the public internet. A public
 GitHub repository makes the source code public; it does not make a locally
 running WheelDesk instance safe to deploy publicly.

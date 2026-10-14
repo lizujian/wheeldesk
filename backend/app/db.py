@@ -1,4 +1,5 @@
 import os
+from datetime import date
 from pathlib import Path
 
 from decimal import Decimal
@@ -133,6 +134,50 @@ def initialize_database(selected_engine: Engine = engine) -> None:
     _migrate_legacy_unallocated(selected_engine)
     _migrate_legacy_other_holdings(selected_engine)
     _migrate_strategy_positions(selected_engine)
+    _migrate_legacy_nav_cash(selected_engine)
+
+
+def _migrate_legacy_nav_cash(selected_engine: Engine) -> None:
+    """Reclassify historical NAV cash adjustments once, retaining audit events."""
+    from app.db_models import BrokerAccountSnapshot
+    from app.services.account_valuation import AccountValuationService
+
+    with Session(selected_engine) as session:
+        legacy = list(session.scalars(select(LedgerEvent).where(
+            LedgerEvent.event_type == "broker_nav_reconciliation",
+        ).order_by(LedgerEvent.occurred_on, LedgerEvent.id)))
+        reversed_ids = {row.details.get("legacy_event_id") for row in session.scalars(
+            select(LedgerEvent).where(LedgerEvent.event_type == "broker_nav_cash_reversal"))}
+        pending = [row for row in legacy if row.id not in reversed_ids]
+        if not pending:
+            return
+        cash = session.get(BucketBalance, Bucket.CASH.value)
+        if cash is None:
+            cash = BucketBalance(bucket=Bucket.CASH.value, amount=Decimal("0"))
+            session.add(cash)
+        adjustment = sum((row.amount for row in pending), Decimal("0"))
+        cash.amount -= adjustment
+        for row in pending:
+            session.add(LedgerEvent(
+                event_type="broker_nav_cash_reversal", bucket=Bucket.CASH.value,
+                amount=-row.amount, occurred_on=date.today(),
+                details={"legacy_event_id": row.id, "reason": "净值差额改为估值对账，不再计入现金"},
+            ))
+        session.flush()
+        reported = session.get(BrokerAccountSnapshot, 1)
+        if reported:
+            reported.valuation_adjustment += adjustment
+        else:
+            latest = next((row for row in reversed(legacy) if "ending_value" in row.details), None)
+            if latest is not None:
+                valuation = AccountValuationService(session).snapshot()
+                nav = Decimal(str(latest.details["ending_value"]))
+                session.add(BrokerAccountSnapshot(
+                    id=1, report_as_of=latest.occurred_on, net_asset_value=nav,
+                    valuation_adjustment=nav - valuation["economic_equity"],
+                    filename=latest.details.get("filename", "legacy-statement"),
+                ))
+        session.commit()
 
 
 def _migrate_legacy_unallocated(selected_engine: Engine) -> None:

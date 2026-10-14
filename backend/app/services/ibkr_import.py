@@ -14,6 +14,8 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.db_models import (
+    BrokerAccountSnapshot,
+    BrokerPositionSnapshot,
     BrokerImportRecord,
     BucketBalance,
     LedgerEvent,
@@ -41,6 +43,7 @@ HUNDRED = Decimal("100")
 PRICE_QUANTUM = Decimal("0.0001")
 
 SECTION_ALIASES = {
+    "账户信息": "account_information",
     "未平仓持仓": "open_positions",
     "存款和取款": "deposits",
     "交易": "trades",
@@ -159,15 +162,16 @@ class IbkrImportService:
         if not rows:
             raise ValueError("未识别到 IBKR Activity Statement CSV 数据行")
 
-        trade_dates = self._trade_dates(rows)
-        put_rolls = self._put_rolls(rows)
-        position_rolls = self._position_rolls(rows)
+        planning_rows = [row for row in rows if _section_key(row.section) != "open_positions" or not self._stale_snapshot(row)]
+        trade_dates = self._trade_dates(planning_rows)
+        put_rolls = self._put_rolls(planning_rows)
+        position_rolls = self._position_rolls(planning_rows)
         roll_trade_fingerprints = {
             trade.fingerprint
             for roll in [*put_rolls.values(), *position_rolls.values()]
             for trade in (roll.closing_row, roll.opening_row)
         }
-        opening_trades = self._opening_trades(rows)
+        opening_trades = self._opening_trades(planning_rows)
         candidate_fingerprints = {
             value
             for row in rows
@@ -198,7 +202,7 @@ class IbkrImportService:
                 )
             ):
                 self._preview_pmcc_closures.add(closing["details"]["holding_id"])
-        self._plan_share_coverage(rows)
+        self._plan_share_coverage(planning_rows)
         used_slots = self._used_leaps_slots()
         preview_rows: list[dict[str, Any]] = []
         recognized_sections: set[str] = set()
@@ -206,7 +210,12 @@ class IbkrImportService:
         for row in rows:
             section_key = _section_key(row.section)
             item: dict[str, Any] | None = None
-            if section_key == "open_positions":
+            if section_key in {"open_positions", "trades", "deposits"} and _value(row.values, "Currency").upper() != "USD":
+                currency = _value(row.values, "Currency") or "未知"
+                item = self._item(row, instrument=_value(row.values, "Symbol", "Description") or "资金变动",
+                    action="skip", status="review", confidence="low", selected=False, can_import=False,
+                    message=f"币种 {currency} 暂不支持自动折算为 USD，请核对美元金额后导入", details={"currency": currency})
+            elif section_key == "open_positions":
                 recognized_sections.add("Open Positions")
                 item = self._preview_position(
                     row,
@@ -228,6 +237,9 @@ class IbkrImportService:
                 )
             if item is None:
                 continue
+            if section_key == "open_positions" and row.report_as_of is None and item["can_import"]:
+                item.update(action="skip", status="review", selected=False, can_import=False,
+                            message="缺少报表日期，不能更新持仓快照；请导出包含报表期间的活动报表")
             already_imported = (
                 item["fingerprint"] in imported
                 or row.fingerprint in imported
@@ -256,7 +268,7 @@ class IbkrImportService:
                 )
             preview_rows.append(item)
 
-        if not preview_rows:
+        if not preview_rows and _account_summary(content, rows) is None:
             raise ValueError("报表中没有可预览的持仓或入金数据")
 
         counts = {
@@ -278,6 +290,18 @@ class IbkrImportService:
         }
 
     def confirm(
+        self, filename: str, content: str, selected_fingerprints: list[str],
+        overrides: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        try:
+            result = self._confirm(filename, content, selected_fingerprints, overrides)
+            self.session.commit()
+            return result
+        except Exception:
+            self.session.rollback()
+            raise
+
+    def _confirm(
         self,
         filename: str,
         content: str,
@@ -301,7 +325,7 @@ class IbkrImportService:
             if default_selection <= selected
             else None
         )
-        first_import = not bool(
+        first_import = self.session.get(BrokerAccountSnapshot, 1) is None and not bool(
             self.session.scalar(select(func.count(BrokerImportRecord.id)))
         )
         if account_summary and first_import:
@@ -311,7 +335,7 @@ class IbkrImportService:
         # Apply the buybacks used by preview's coverage plan before new calls,
         # even when the user selected ending positions first.
         ordered_fingerprints = sorted(
-            selected_fingerprints,
+            dict.fromkeys(selected_fingerprints),
             key=lambda value: not self._releases_pmcc_coverage(available[value]),
         )
         for fingerprint in ordered_fingerprints:
@@ -321,7 +345,6 @@ class IbkrImportService:
             entity_type, entity_id = self._apply(
                 item,
                 overrides.get(fingerprint, {}),
-                deposit_affects_balance=account_summary is None,
             )
             record = self.session.scalar(
                 select(BrokerImportRecord).where(
@@ -338,7 +361,7 @@ class IbkrImportService:
             record.entity_type = entity_type
             record.entity_id = entity_id
             record.raw = item["source"]
-            self.session.commit()
+            self.session.flush()
             results.append(
                 {
                     "fingerprint": fingerprint,
@@ -350,12 +373,14 @@ class IbkrImportService:
             )
         from app.services.etf_pmcc import reclassify_etf_pmcc
         if reclassify_etf_pmcc(self.session):
-            self.session.commit()
+            self.session.flush()
+        self._record_statement_dates(snapshot["rows"], selected, complete=default_selection <= selected)
         if default_selection <= selected:
             self._record_core_trades(parse_activity_statement(content))
+        summary_updated = False
         if account_summary:
-            self._reconcile_account_summary(account_summary, filename)
-        return {"imported": len(results), "results": results}
+            summary_updated = self._reconcile_account_summary(account_summary, filename, refresh_same_date=bool(results))
+        return {"imported": len(results), "results": results, "account_summary_updated": summary_updated}
 
     def _validate_pmcc_selection(self, items: list[dict[str, Any]]) -> None:
         """A partial selection must include the buybacks freeing its coverage."""
@@ -440,6 +465,7 @@ class IbkrImportService:
         }
 
     def _record_core_trades(self, rows: list[StatementRow]) -> None:
+        rows = [row for row in rows if _section_key(row.section) != "open_positions" or not self._stale_snapshot(row)]
         quantities = {symbol: ZERO for symbol in CORE_ROTATION_SYMBOLS}
         has_snapshot = any(_section_key(row.section) == "open_positions" for row in rows)
         trades = []
@@ -501,8 +527,8 @@ class IbkrImportService:
                 ):
                     continue
                 price = sum((abs(contract.quantity) * contract.cost_price for _, contract in sales), ZERO) / sold_quantity
-                CoreRebalancingService(self.session).sell_fifo(sold_on, quantity, price, symbol)
-        self.session.commit()
+                CoreRebalancingService(self.session, commit=False).sell_fifo(sold_on, quantity, price, symbol)
+        self.session.flush()
 
     def import_all(self, filename: str, content: str) -> dict[str, Any]:
         snapshot = self.preview(filename, content)
@@ -511,11 +537,7 @@ class IbkrImportService:
             for row in snapshot["rows"]
             if row["selected"] and row["can_import"]
         ]
-        confirmed = (
-            self.confirm(filename, content, selected, {})
-            if selected
-            else {"imported": 0, "results": []}
-        )
+        confirmed = self.confirm(filename, content, selected, {})
         notices = [
             {
                 "instrument": row["instrument"],
@@ -531,6 +553,7 @@ class IbkrImportService:
             "report_as_of": snapshot["report_as_of"],
             "statement_rows": snapshot["statement_rows"],
             "imported": confirmed["imported"],
+            "account_summary_updated": confirmed["account_summary_updated"],
             "unchanged": unchanged,
             "needs_attention": len(notices),
             "results": confirmed["results"],
@@ -541,47 +564,116 @@ class IbkrImportService:
         profile = self.session.get(PortfolioProfile, 1)
         if profile is None:
             raise ValueError("请先初始化账户")
-        starting_value = summary.get("starting_value")
-        period_start = summary.get("period_start")
-        if starting_value is not None and Decimal(str(starting_value)) > ZERO:
-            profile.opening_equity = Decimal(str(starting_value))
-        if period_start:
-            profile.opening_date = date.fromisoformat(str(period_start))
-        self.session.execute(
-            delete(LedgerEvent).where(LedgerEvent.event_type == "deposit")
-        )
+        starting_value = Decimal(str(summary.get("starting_value") or ZERO))
+        if starting_value <= ZERO:
+            return
+        from app.domain.allocation import allocation_targets
+        profile.opening_equity = starting_value
+        profile.opening_date = date.fromisoformat(str(summary["period_start"]))
+        # A first complete statement replaces the provisional opening baseline;
+        # subsequent deposits are posted once through the regular cash ledger.
+        targets = allocation_targets(profile.age)
+        amounts = {bucket.value: (starting_value * fraction).quantize(Decimal("0.01")) for bucket, fraction in targets.items()}
+        amounts[Bucket.UNALLOCATED.value] = starting_value - sum(amounts.values(), ZERO)
+        provisional_deposits: dict[str, Decimal] = {}
+        for event in self.session.scalars(select(LedgerEvent).where(LedgerEvent.event_type == "deposit")):
+            provisional_deposits[event.bucket] = provisional_deposits.get(event.bucket, ZERO) + event.amount
+        for row in self.session.scalars(select(BucketBalance)):
+            amount = amounts.get(row.bucket, ZERO)
+            adjustment = amount - row.amount + provisional_deposits.get(row.bucket, ZERO)
+            row.amount = amount
+            if adjustment:
+                self.session.add(LedgerEvent(
+                    event_type="broker_opening_baseline", bucket=row.bucket, amount=adjustment,
+                    occurred_on=profile.opening_date, details={"source": "IBKR"},
+                ))
+        self.session.execute(delete(LedgerEvent).where(LedgerEvent.event_type == "deposit"))
         self.session.flush()
 
     def _reconcile_account_summary(
-        self, summary: dict[str, Any], filename: str
-    ) -> None:
-        ending_value = Decimal(str(summary["ending_value"]))
-        balances = list(self.session.scalars(select(BucketBalance)))
-        current_total = sum((row.amount for row in balances), ZERO)
-        adjustment = (ending_value - current_total).quantize(Decimal("0.01"))
-        if adjustment == ZERO:
-            return
-        cash = self.session.get(BucketBalance, Bucket.CASH.value)
-        if cash is None:
-            cash = BucketBalance(bucket=Bucket.CASH.value, amount=ZERO)
-            self.session.add(cash)
-        cash.amount += adjustment
+        self, summary: dict[str, Any], filename: str, *, refresh_same_date: bool = False
+    ) -> bool:
+        from app.services.account_valuation import AccountValuationService
         occurred_on = date.fromisoformat(str(summary["period_end"]))
-        self.session.add(
-            LedgerEvent(
-                event_type="broker_nav_reconciliation",
-                bucket=Bucket.CASH.value,
-                amount=adjustment,
-                occurred_on=occurred_on,
-                details={
-                    "filename": filename,
-                    "source": "IBKR",
-                    "previous_total": float(current_total),
-                    "ending_value": float(ending_value),
-                },
-            )
-        )
-        self.session.commit()
+        ending_value = Decimal(str(summary["ending_value"]))
+        record = self.session.get(BrokerAccountSnapshot, 1)
+        if record and (occurred_on < record.report_as_of or
+                       (occurred_on == record.report_as_of and ending_value == record.net_asset_value and not refresh_same_date)):
+            return False
+        valuation = AccountValuationService(self.session).snapshot()
+        adjustment = (ending_value - valuation["ledger_equity"] - sum(valuation["unrealized"].values(), ZERO)).quantize(Decimal("0.01"))
+        if record is None:
+            record = BrokerAccountSnapshot(id=1)
+            self.session.add(record)
+        record.report_as_of = occurred_on
+        record.net_asset_value = ending_value
+        record.valuation_adjustment = adjustment
+        record.filename = filename
+        # This is an observation, never a cash posting. Unknown differences
+        # remain visible for reconciliation and cannot fund a purchase.
+        self.session.add(LedgerEvent(
+            event_type="broker_nav_observation", bucket=Bucket.UNALLOCATED.value,
+            amount=ZERO, occurred_on=occurred_on,
+            details={"source": "IBKR", "ending_value": str(ending_value),
+                     "valuation_adjustment": str(adjustment)},
+        ))
+        self.session.flush()
+        return True
+
+    def _stale_snapshot(self, row: StatementRow) -> bool:
+        key = _snapshot_key(row.values)
+        previous = self.session.get(BrokerPositionSnapshot, key) if key else None
+        dates = [previous.report_as_of] if previous else []
+        contract = _contract(row.values)
+        if contract:
+            for model in (PositionRecord, UnmanagedPositionRecord, WheelPutLot):
+                if model is WheelPutLot and contract.option_type != "put":
+                    continue
+                query = select(model).where(model.symbol == contract.symbol, model.expiration == contract.expiration, model.strike == contract.strike)
+                if model is not WheelPutLot:
+                    query = query.where(model.asset_type == contract.asset_type, model.option_type == contract.option_type)
+                records = list(self.session.scalars(query))
+                active = [record for record in records if getattr(record, "status", getattr(record, "state", None)) == "open"]
+                quantity = sum((Decimal(str(record.open_quantity if model is WheelPutLot else record.quantity)) for record in active), ZERO)
+                cost = sum(((record.premium if model is WheelPutLot else record.entry_price or ZERO)
+                            * (record.open_quantity if model is WheelPutLot else record.quantity) for record in active), ZERO)
+                matches_current = quantity == abs(contract.quantity) and quantity > ZERO and _price_matches(cost / quantity, contract.cost_price)
+                matches_current = matches_current and all(
+                    getattr(record, "direction", "short") == ("short" if contract.quantity < ZERO else "long")
+                    for record in active
+                )
+                for record in records:
+                    dates.extend(stamp for stamp in (getattr(record, "opened_on", None), getattr(record, "trade_date", None), record.closed_on) if stamp)
+                    # Older databases did not retain statement chronology. Until
+                    # a dated statement establishes it, reject ambiguous older
+                    # snapshots conservatively. Subsequent quotes never advance it.
+                    if previous is None and record.quote_as_of and not matches_current:
+                        stamp = record.quote_as_of
+                        dates.append(stamp.date() if isinstance(stamp, datetime) else stamp)
+        return bool(dates and (row.report_as_of is None or row.report_as_of < max(dates)))
+
+    def _record_statement_dates(self, items, selected, *, complete):
+        for item in items:
+            section = _section_key(item["section"])
+            accepted = item["fingerprint"] in selected or item["status"] in {"matched", "duplicate"}
+            if not accepted or section not in {"open_positions", "trades"}:
+                continue
+            if section == "trades" and not complete:
+                continue
+            key = _snapshot_key(item["source"])
+            raw_date = item["details"].get("report_as_of")
+            stamp = (_parse_datetime(_value(item["source"], "Date/Time", "Trade Date", "Date"))
+                     if section == "trades" else _parse_date(raw_date or ""))
+            if isinstance(stamp, datetime):
+                stamp = stamp.date()
+            if not key or stamp is None:
+                continue
+            previous = self.session.get(BrokerPositionSnapshot, key)
+            if previous is None:
+                self.session.add(BrokerPositionSnapshot(contract_key=key, report_as_of=stamp))
+            elif stamp > previous.report_as_of:
+                previous.report_as_of = stamp
+            self.session.flush()
 
     def history(self) -> list[dict[str, Any]]:
         records = list(
@@ -664,6 +756,10 @@ class IbkrImportService:
         ],
     ) -> dict[str, Any]:
         contract = _contract(row.values)
+        if row.report_as_of is not None and self._stale_snapshot(row):
+            return self._item(row, instrument=_value(row.values, "Symbol") or "持仓",
+                action="skip", status="review", confidence="exact", selected=False, can_import=False,
+                message="报表日期早于已同步的持仓快照，已保留较新的数量、成本和状态", details={})
         if contract is None:
             return self._item(
                 row,
@@ -1110,7 +1206,7 @@ class IbkrImportService:
         if (
             not existing
             and contract.symbol == "TQQQ"
-            and WheelPortfolioService(self.session).has_exposure(contract.symbol)
+            and WheelPortfolioService(self.session, commit=False).has_exposure(contract.symbol)
         ):
             return self._item(
                 row,
@@ -1486,6 +1582,10 @@ class IbkrImportService:
         traded_at = _parse_datetime(_value(row.values, "Date/Time", "Trade Date", "Date"))
         if contract is None or traded_at is None or "C" not in codes:
             return None
+        if self._stale_snapshot(replace(row, report_as_of=traded_at.date())):
+            return self._item(row, instrument=_instrument_label(contract), action="skip",
+                status="review", confidence="exact", selected=False, can_import=False,
+                message="历史平仓早于已知持仓状态，请核对历史交易；未更改当前持仓", details={})
         quantity = abs(contract.quantity)
         details = _contract_details(contract, traded_at.date())
         details.update(
@@ -1654,8 +1754,6 @@ class IbkrImportService:
         self,
         item: dict[str, Any],
         override: dict[str, Any],
-        *,
-        deposit_affects_balance: bool = True,
     ) -> tuple[str, int]:
         details = {**item["details"], **override}
         action = item["action"]
@@ -1663,19 +1761,11 @@ class IbkrImportService:
             amount = Decimal(str(details["amount"]))
             occurred_on = date.fromisoformat(details["occurred_on"])
             note = f"IBKR 导入：{details['note']}"
-            if deposit_affects_balance:
-                PortfolioStore(self.session).deposit(amount, occurred_on, note)
-            else:
-                self.session.add(
-                    LedgerEvent(
-                        event_type="deposit",
-                        bucket=Bucket.CASH.value,
-                        amount=amount,
-                        occurred_on=occurred_on,
-                        details={"note": note, "source": "IBKR", "snapshot_included": True},
-                    )
-                )
-                self.session.flush()
+            PortfolioStore(self.session, commit=False).deposit(amount, occurred_on, note)
+            reported = self.session.get(BrokerAccountSnapshot, 1)
+            if reported and occurred_on <= reported.report_as_of:
+                # Backfilled cash was already included in the observed NAV.
+                reported.valuation_adjustment -= amount
             event = self.session.scalar(
                 select(LedgerEvent).where(LedgerEvent.event_type == "deposit").order_by(LedgerEvent.id.desc())
             )
@@ -1691,14 +1781,14 @@ class IbkrImportService:
         if action in {"create_wheel_call", "update_wheel_call"}:
             return "wheel_call", self._apply_call(action, details)
         if action == "close_wheel_put":
-            record = WheelPortfolioService(self.session).close_put(
+            record = WheelPortfolioService(self.session, commit=False).close_put(
                 int(details["put_id"]),
                 date.fromisoformat(details["closed_on"]),
                 Decimal(str(details["exit_price"])),
             )
             return "wheel_put", record.id
         if action == "close_wheel_call":
-            record = WheelPortfolioService(self.session).close_call(
+            record = WheelPortfolioService(self.session, commit=False).close_call(
                 int(details["call_id"]),
                 date.fromisoformat(details["closed_on"]),
                 Decimal(str(details["exit_price"])),
@@ -1711,7 +1801,7 @@ class IbkrImportService:
         if action == "roll_position":
             return "position", self._apply_position_roll(details)
         if action == "close_unmanaged":
-            OtherHoldingService(self.session).close(
+            OtherHoldingService(self.session, commit=False).close(
                 int(details["holding_id"]),
                 date.fromisoformat(details["closed_on"]),
                 Decimal(str(details["exit_price"])),
@@ -1760,7 +1850,7 @@ class IbkrImportService:
             profit_source="leaps",
             note=f"{record.symbol} LEAPS 平仓（IBKR 导入）",
         )
-        self.session.commit()
+        self.session.flush()
         return record.id
 
     def _apply_position_roll(self, details: dict[str, Any]) -> int:
@@ -1839,7 +1929,7 @@ class IbkrImportService:
             profit_source="leaps",
             note=f"{previous.symbol} LEAPS 展期",
         )
-        self.session.commit()
+        self.session.flush()
         return current.id
 
     def _apply_closed_unmanaged(self, details: dict[str, Any]) -> int:
@@ -1879,7 +1969,7 @@ class IbkrImportService:
             quote_as_of=date.fromisoformat(details["closed_on"]),
         )
         self.session.add(record)
-        self.session.commit()
+        self.session.flush()
         return record.id
 
     def _apply_position(self, action: str, details: dict[str, Any]) -> int:
@@ -1889,7 +1979,7 @@ class IbkrImportService:
         previous_quantity: Decimal | None = None
         if action == "create_position":
             if details["bucket"] == Bucket.CORE.value:
-                PortfolioStore(self.session).auto_fund_core(entry_price * quantity, date.fromisoformat(details["opened_on"]))
+                PortfolioStore(self.session, commit=False).auto_fund_core(entry_price * quantity, date.fromisoformat(details["opened_on"]))
             if details.get("promote_holding_id"):
                 from app.services.etf_pmcc import promote_etf_long
                 holding = self.session.get(UnmanagedPositionRecord, details["promote_holding_id"])
@@ -1963,7 +2053,7 @@ class IbkrImportService:
                 details={"position_id": record.id, "symbol": record.symbol, "source": "IBKR"},
             )
         )
-        self.session.commit()
+        self.session.flush()
         return record.id
 
     def _apply_unmanaged(self, action: str, details: dict[str, Any]) -> int:
@@ -2024,7 +2114,7 @@ class IbkrImportService:
             details.get("report_as_of") or date.today().isoformat()
         )
         record.last_error = None
-        self.session.commit()
+        self.session.flush()
         return record.id
 
     def _apply_leaps_call(self, action: str, details: dict[str, Any]) -> int:
@@ -2083,11 +2173,11 @@ class IbkrImportService:
             profit_source="leaps",
             note=f"{record.symbol} PMCC Short Call 平仓",
         )
-        self.session.commit()
+        self.session.flush()
         return record.id
 
     def _apply_put(self, action: str, details: dict[str, Any]) -> int:
-        service = WheelPortfolioService(self.session)
+        service = WheelPortfolioService(self.session, commit=False)
         if action == "roll_wheel_put":
             record = service.roll_put(
                 int(details["put_id"]),
@@ -2143,7 +2233,7 @@ class IbkrImportService:
         return record.id
 
     def _apply_call(self, action: str, details: dict[str, Any]) -> int:
-        service = WheelPortfolioService(self.session)
+        service = WheelPortfolioService(self.session, commit=False)
         values = {
             "trade_date": date.fromisoformat(details["opened_on"]),
             "expiration": date.fromisoformat(details["expiration"]),
@@ -2695,7 +2785,17 @@ def _section_key(value: str) -> str:
     return normalized
 
 
+def _snapshot_key(values: dict[str, str]) -> str | None:
+    contract = _contract(values)
+    if contract is None:
+        return None
+    canonical = json.dumps([str(value.normalize()) if isinstance(value, Decimal) else str(value) for value in contract.key])
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
 def _contract(values: dict[str, str]) -> Contract | None:
+    if _value(values, "Currency").upper() != "USD":
+        return None
     category = _value(values, "Asset Category", "Asset Class", "Category").lower()
     symbol_text = _value(values, "Underlying Symbol", "Underlying", "Symbol")
     quantity = _decimal(_value(values, "Quantity", "Position"))
@@ -2879,8 +2979,13 @@ def _account_summary(
         key = aliases.get(label)
         if key is not None:
             fields[key] = _decimal(_value(row.values, "Field Value", "Value"))
-    if period_start is None or period_end is None or fields.get("ending_value", ZERO) <= ZERO:
+    if period_start is None or period_end is None or "ending_value" not in fields:
         return None
+    base_currencies = {_value(row.values, "Field Value", "Value").upper() for row in rows
+        if _section_key(row.section) in {"accountinformation", "account_information"}
+        and _value(row.values, "Field Name", "Field", "Name").lower() in {"base currency", "基础货币", "基准货币"}}
+    if base_currencies != {"USD"}:
+        raise ValueError("账户摘要需要明确的 USD 基准币种；非美元净值不能按 1:1 导入")
     return {
         "period_start": period_start.isoformat(),
         "period_end": period_end.isoformat(),

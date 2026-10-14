@@ -24,6 +24,10 @@ export function OverviewPage({ portfolio, onInitialize }: {
         <Metric icon={Landmark} label="净入金" value={formatMoney(portfolio.net_external_capital ?? 0)} />
         <Metric icon={TrendingUp} label="投资损益" value={formatMoney(portfolio.investment_profit ?? 0)} tone={(portfolio.investment_profit ?? 0) >= 0 ? 'positive' : 'negative'} />
       </section>
+      {portfolio.valuation?.broker_report_as_of && <p className="quote-provenance">
+        券商报表净值 {formatMoney(portfolio.valuation.broker_net_asset_value ?? 0)} · {portfolio.valuation.broker_report_as_of}
+        {portfolio.valuation.valuation_adjustment !== 0 && <> · 待对账差额 {formatMoney(portfolio.valuation.valuation_adjustment)}，不计入可用现金</>}
+      </p>}
       <CashControl portfolio={portfolio} />
       <section className="dashboard-band">
         <div className="allocation-panel"><div className="section-title"><div><p>实时配比</p><h2>资金分布</h2></div><span>目标 vs 实际</span></div><AllocationChart portfolio={portfolio} /></div>

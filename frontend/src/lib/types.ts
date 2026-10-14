@@ -39,6 +39,14 @@ export interface PortfolioSummary {
   total_equity?: number
   net_external_capital?: number
   investment_profit?: number
+  valuation?: {
+    ledger_equity: number
+    unrealized: Record<string, number>
+    economic_equity: number
+    valuation_adjustment: number
+    broker_net_asset_value: number | null
+    broker_report_as_of: string | null
+  }
   other_holdings_value?: number
   balances?: Record<Bucket, number>
   targets?: Partial<Record<Exclude<Bucket, 'unallocated'> | 'options', TargetRow>>
@@ -664,6 +672,9 @@ export interface RebalancingSnapshot {
   capital: CapitalSnapshot
   economic: {
     total: number
+    other_unrealized?: number
+    valuation_adjustment?: number
+    broker_report_as_of?: string | null
     buckets: Record<'core' | 'cash' | 'options', RebalancingBucket>
     unrealized: Record<'core' | 'wheel' | 'leaps', number>
   }
@@ -741,6 +752,7 @@ export interface IbkrAutoImportResult {
   report_as_of?: string | null
   statement_rows: number
   imported: number
+  account_summary_updated?: boolean
   unchanged: number
   needs_attention: number
   results: Array<{

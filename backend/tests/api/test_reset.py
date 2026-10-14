@@ -36,7 +36,7 @@ def reset_client():
             yield session
 
     app.dependency_overrides[get_session] = override_session
-    return TestClient(app), sessions
+    return TestClient(app, base_url="http://127.0.0.1"), sessions
 
 
 def seed_data(client: TestClient) -> None:

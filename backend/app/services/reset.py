@@ -2,6 +2,8 @@ from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from app.db_models import (
+    BrokerAccountSnapshot,
+    BrokerPositionSnapshot,
     BrokerImportRecord,
     CoreTradeRecord,
     BucketBalance,
@@ -29,6 +31,8 @@ class ResetService:
     def reset_all(self) -> None:
         try:
             for model in (
+                BrokerAccountSnapshot,
+                BrokerPositionSnapshot,
                 BrokerImportRecord,
                 CoreTradeRecord,
                 RealizedCashPosting,

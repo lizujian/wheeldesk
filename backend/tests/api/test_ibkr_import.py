@@ -42,7 +42,9 @@ Statement,Data,Period,"一月 1, 2026 - 八月 25, 2026"
 存款和取款,Data,USD,,,1000
 '''
 
-LOCALIZED_NAV_REPORT = LOCALIZED_REPORT + '''净资产值变更,Header,域名称,域值
+LOCALIZED_NAV_REPORT = LOCALIZED_REPORT + '''账户信息,Header,域名称,域值
+账户信息,Data,基础货币,USD
+净资产值变更,Header,域名称,域值
 净资产值变更,Data,开始价值,50000
 净资产值变更,Data,存款和取款,1000
 净资产值变更,Data,结束价值,60000
@@ -117,7 +119,7 @@ def import_client():
 
     app.dependency_overrides[get_session] = override_session
     try:
-        client = TestClient(app)
+        client = TestClient(app, base_url="http://127.0.0.1")
         initialized = client.post(
             "/api/portfolio/initialize",
             json={"age": 36, "opening_equity": 100000, "opening_date": "2026-08-01"},

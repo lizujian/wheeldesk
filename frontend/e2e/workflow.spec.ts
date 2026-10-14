@@ -32,15 +32,15 @@ test('initializes the local read-only strategy console and protects reset', asyn
 
   await page.getByRole('link', { name: '核心仓' }).first().click()
   await expect(page.getByRole('heading', { name: '核心仓相对定投' })).toBeVisible()
-  await expect(page.getByText('IBKR 报表中暂无 BRK.B 或 VOO 持仓')).toBeVisible()
+  await expect(page.getByText('IBKR 报表中暂无 BRK.B、VOO 或 SCHD 持仓')).toBeVisible()
   await expect(page.getByRole('form')).toHaveCount(0)
 
-  await page.getByRole('link', { name: '车轮' }).first().click()
-  await expect(page.getByRole('heading', { name: '车轮策略操作台' })).toBeVisible()
+  await page.getByRole('link', { name: '其他' }).first().click()
+  await expect(page.getByRole('heading', { name: '其他持仓与过渡仓' })).toBeVisible()
   await expect(page.getByRole('form')).toHaveCount(0)
 
   await page.getByRole('link', { name: 'LEAPS' }).first().click()
-  await expect(page.getByRole('heading', { name: 'LEAPS 双策略台' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'LEAPS / PMCC 双策略台' })).toBeVisible()
   await expect(page.getByRole('form')).toHaveCount(0)
 
   await page.getByRole('link', { name: '设置' }).first().click()
@@ -49,6 +49,8 @@ test('initializes the local read-only strategy console and protects reset', asyn
   await page.getByLabel('输入 RESET 继续').fill('RESET')
   await page.getByRole('button', { name: '永久清空数据' }).click()
   await expect(page.getByRole('heading', { name: '建立账户基线' })).toBeVisible()
+  const cleared = await page.request.get('/api/portfolio/summary')
+  expect((await cleared.json()).initialized).toBe(false)
 })
 
 test('imports a synthetic IBKR statement and deduplicates a repeated file', async ({ page }) => {
@@ -72,6 +74,7 @@ test('imports a synthetic IBKR statement and deduplicates a repeated file', asyn
   await expect(page.locator('.core-lot-table')).toContainText('10 股')
 
   await page.getByRole('link', { name: 'LEAPS' }).first().click()
+  await page.getByRole('tab', { name: /当前持仓/ }).click()
   await expect(page.getByRole('article', { name: /LEAPS 持仓/ })).toContainText('QQQ')
 
   await page.getByRole('link', { name: '其他' }).first().click()

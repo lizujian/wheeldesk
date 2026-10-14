@@ -119,7 +119,7 @@ export function IbkrImportPage({ onImported }: { onImported: () => Promise<void>
     {error && <div className="import-message error" role="alert"><AlertTriangle size={17} /><span>{error}</span><button onClick={() => setError('')} title="关闭"><X size={15} /></button></div>}
     {result && <div className={`import-message ${result.needs_attention ? 'warning' : 'success'}`} role="status">
       {result.needs_attention ? <AlertTriangle size={17} /> : <CheckCircle2 size={17} />}
-      <span>{result.imported ? `已同步 ${result.imported} 条新增记录` : '没有需要新增的记录'}；{result.unchanged} 条已一致{result.needs_attention ? `；${result.needs_attention} 条需要代码适配` : ''}。</span>
+      <span>{result.imported ? `已同步 ${result.imported} 条新增记录` : '没有需要新增的记录'}{result.account_summary_updated ? '；账户摘要已更新' : ''}；{result.unchanged} 条已一致{result.needs_attention ? `；${result.needs_attention} 条需要核对` : ''}。</span>
     </div>}
 
     <div className="segmented-control" aria-label="导入视图">

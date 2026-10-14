@@ -14,8 +14,15 @@ SHARE = Decimal("0.0001")
 
 
 class CoreRebalancingService:
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, *, commit: bool = True) -> None:
         self.session = session
+        self._commit = commit
+
+    def _persist(self) -> None:
+        if self._commit:
+            self.session.commit()
+        else:
+            self.session.flush()
 
     def sell_fifo(
         self, sold_on: date, quantity: Decimal, price: Decimal, symbol: str = "BRK.B"
@@ -98,7 +105,7 @@ class CoreRebalancingService:
                 },
             )
         )
-        self.session.commit()
+        self._persist()
         return {
             "symbol": symbol,
             "quantity": quantity,

@@ -22,7 +22,7 @@ def exit_client() -> TestClient:
             yield session
 
     app.dependency_overrides[get_session] = override_session
-    return TestClient(app)
+    return TestClient(app, base_url="http://127.0.0.1")
 
 
 def test_lightweight_exit_position_workflow_and_summary() -> None:

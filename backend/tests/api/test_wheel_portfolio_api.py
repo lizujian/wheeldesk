@@ -44,7 +44,7 @@ def wheel_client(total: int = 312_500, funded: int = 100_000):
 
     app.dependency_overrides[get_session] = override_session
     try:
-        yield TestClient(app)
+        yield TestClient(app, base_url="http://127.0.0.1")
     finally:
         app.dependency_overrides.clear()
         engine.dispose()

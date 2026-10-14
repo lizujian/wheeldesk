@@ -94,7 +94,7 @@ def club_client():
     app.dependency_overrides[get_vix_provider] = app.dependency_overrides[get_market_provider]
     app.dependency_overrides[get_option_provider] = lambda: provider
     try:
-        yield TestClient(app), provider
+        yield TestClient(app, base_url="http://127.0.0.1"), provider
     finally:
         app.dependency_overrides.clear()
         engine.dispose()

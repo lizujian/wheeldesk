@@ -50,7 +50,7 @@ def cash_capacity(
     wheel_occupancy: Decimal = ZERO,
     leaps_occupancy: Decimal = ZERO,
 ) -> CashCapacity:
-    total = max(total, ZERO).quantize(CENT)
+    total = total.quantize(CENT)
     cash_equivalent = max(cash_equivalent, ZERO).quantize(CENT)
     # BOXX is a cash-equivalent form of the cash bucket, not an amount outside
     # the bucket. Keep it visible for reporting, but do not subtract it from

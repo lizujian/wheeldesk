@@ -66,6 +66,18 @@ describe('IBKR import page', () => {
     expect(onImported).toHaveBeenCalled()
   })
 
+  it('refreshes account data and reports a summary update when no positions were added', async () => {
+    const user = userEvent.setup()
+    const onImported = vi.fn().mockResolvedValue(undefined)
+    vi.mocked(api.ibkrAutoImport).mockResolvedValue({ ...result, imported: 0, results: [], account_summary_updated: true })
+    render(<IbkrImportPage onImported={onImported} />)
+    const file = new File(['summary'], 'summary.csv', { type: 'text/csv' })
+    Object.defineProperty(file, 'text', { value: vi.fn().mockResolvedValue('summary') })
+    await user.upload(screen.getByLabelText('选择 IBKR CSV'), file)
+    expect(await screen.findByRole('status')).toHaveTextContent('账户摘要已更新')
+    expect(onImported).toHaveBeenCalledTimes(1)
+  })
+
   it('shows read-only import history without a source column', async () => {
     const user = userEvent.setup()
     vi.mocked(api.ibkrHistory).mockResolvedValue([{

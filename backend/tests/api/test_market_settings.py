@@ -27,7 +27,7 @@ def local_client():
             yield session
     app.dependency_overrides[get_session] = session_dependency
     try:
-        yield TestClient(app), engine
+        yield TestClient(app, base_url="http://127.0.0.1"), engine
     finally:
         app.dependency_overrides.clear()
         close_providers()

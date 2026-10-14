@@ -69,13 +69,18 @@ def quote_client():
     app.dependency_overrides[get_vix_provider] = app.dependency_overrides[get_market_provider]
     app.dependency_overrides[get_option_provider] = lambda: provider
     try:
-        yield TestClient(app)
+        yield TestClient(app, base_url="http://127.0.0.1")
     finally:
         app.dependency_overrides.clear()
         engine.dispose()
 
 
-def test_refresh_marks_leaps_at_bid_and_serializes_the_exit_decision() -> None:
+def test_refresh_marks_leaps_at_bid_and_serializes_the_exit_decision(monkeypatch) -> None:
+    class EvaluationDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 7, 22)
+    monkeypatch.setattr("app.api.positions.date", EvaluationDate)
     with quote_client() as client:
         client.post(
             "/api/portfolio/initialize",

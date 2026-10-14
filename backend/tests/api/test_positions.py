@@ -24,7 +24,7 @@ def client_with_database() -> TestClient:
             yield session
 
     app.dependency_overrides[get_session] = override_session
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://127.0.0.1")
     initialized = client.post(
         "/api/portfolio/initialize",
         json={

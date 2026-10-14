@@ -30,7 +30,7 @@ def test_manual_workflow_from_onboarding_to_profit_redistribution() -> None:
         as_of=date(2026, 7, 9)
     )
     app.dependency_overrides[get_vix_provider] = app.dependency_overrides[get_market_provider]
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://127.0.0.1")
 
     initialized = client.post(
         "/api/portfolio/initialize",

@@ -30,8 +30,15 @@ HUNDRED = Decimal("100")
 
 
 class WheelPortfolioService:
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, *, commit: bool = True) -> None:
         self.session = session
+        self._commit = commit
+
+    def _persist(self) -> None:
+        if self._commit:
+            self.session.commit()
+        else:
+            self.session.flush()
 
     def open_put(
         self,
@@ -109,7 +116,7 @@ class WheelPortfolioService:
             realized_profit=ZERO,
         )
         self.session.add(record)
-        self.session.commit()
+        self._persist()
         return record
 
     def edit_put(
@@ -144,7 +151,7 @@ class WheelPortfolioService:
             if entry_tqqq_price <= ZERO:
                 raise ValueError("TQQQ 开仓价格必须大于零")
             record.entry_tqqq_price = entry_tqqq_price
-        self.session.commit()
+        self._persist()
         return record
 
     def close_put(self, put_id: int, closed_on: date, buyback_premium: Decimal) -> WheelPutLot:
@@ -162,7 +169,7 @@ class WheelPortfolioService:
         self._post_profit(
             f"wheel-put:{record.id}", profit, closed_on, record.capital_bucket
         )
-        self.session.commit()
+        self._persist()
         return record
 
     def roll_put(
@@ -224,7 +231,7 @@ class WheelPortfolioService:
         self._post_profit(
             f"wheel-put:{previous.id}", profit, rolled_on, previous.capital_bucket
         )
-        self.session.commit()
+        self._persist()
         return next_put
 
     def expire_put(self, put_id: int, expired_on: date) -> WheelPutLot:
@@ -239,7 +246,7 @@ class WheelPortfolioService:
         self._post_profit(
             f"wheel-put:{record.id}", profit, expired_on, record.capital_bucket
         )
-        self.session.commit()
+        self._persist()
         return record
 
     def assign_put(self, put_id: int, assigned_on: date, contracts: int) -> WheelShareLot:
@@ -271,7 +278,7 @@ class WheelPortfolioService:
             record.premium * HUNDRED * contracts,
             assigned_on,
         )
-        self.session.commit()
+        self._persist()
         return share_lot
 
     def open_call(
@@ -306,7 +313,7 @@ class WheelPortfolioService:
             realized_profit=ZERO,
         )
         self.session.add(record)
-        self.session.commit()
+        self._persist()
         return record
 
     def edit_call(
@@ -343,7 +350,7 @@ class WheelPortfolioService:
         record.strike = next_strike
         record.premium = next_premium
         record.quantity = next_quantity
-        self.session.commit()
+        self._persist()
         return record
 
     def close_call(self, call_id: int, closed_on: date, buyback_premium: Decimal) -> WheelCallLot:
@@ -360,7 +367,7 @@ class WheelPortfolioService:
         self._post_profit(
             f"wheel-call:{record.id}", record.realized_profit, closed_on
         )
-        self.session.commit()
+        self._persist()
         return record
 
     def expire_call(self, call_id: int, expired_on: date) -> WheelCallLot:
@@ -373,7 +380,7 @@ class WheelPortfolioService:
         self._post_profit(
             f"wheel-call:{record.id}", record.realized_profit, expired_on
         )
-        self.session.commit()
+        self._persist()
         return record
 
     def call_away(self, call_id: int, assigned_on: date) -> WheelCallLot:
@@ -396,7 +403,7 @@ class WheelPortfolioService:
         self._post_profit(
             f"wheel-call:{call.id}", call.realized_profit, assigned_on
         )
-        self.session.commit()
+        self._persist()
         return call
 
     def void_put(self, put_id: int, reason: str) -> WheelPutLot:
@@ -412,7 +419,7 @@ class WheelPortfolioService:
         self._void(record, reason)
         self._reverse_profit(f"wheel-put:{record.id}", reason)
         self._refresh_round(record.round_id)
-        self.session.commit()
+        self._persist()
         return record
 
     def void_chain(self, put_id: int, reason: str) -> dict[str, int]:
@@ -447,7 +454,7 @@ class WheelPortfolioService:
         for call in calls:
             self._reverse_profit(f"wheel-call:{call.id}", reason)
         self._refresh_round(put.round_id)
-        self.session.commit()
+        self._persist()
         return {"puts": 1, "shares": len(shares), "calls": len(calls)}
 
     def round_number(self, round_id: int) -> int:

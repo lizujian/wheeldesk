@@ -12,8 +12,15 @@ ZERO = Decimal("0")
 
 
 class PortfolioStore:
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, *, commit: bool = True) -> None:
         self.session = session
+        self._commit = commit
+
+    def _persist(self) -> None:
+        if self._commit:
+            self.session.commit()
+        else:
+            self.session.flush()
 
     def initialize(
         self,
@@ -52,7 +59,7 @@ class PortfolioStore:
                         details={},
                     )
                 )
-        self.session.commit()
+        self._persist()
         return self.summary()
 
     def profile(self) -> PortfolioProfile | None:
@@ -72,6 +79,10 @@ class PortfolioStore:
 
         balances = self.balances()
         total = sum(balances.values(), ZERO)
+        from app.services.account_valuation import AccountValuationService
+        valuation = AccountValuationService(self.session).snapshot()
+        if valuation["broker_report_as_of"] is not None:
+            total = valuation["economic_equity"]
         deposits = self.session.scalar(
             select(func.coalesce(func.sum(LedgerEvent.amount), 0)).where(
                 LedgerEvent.event_type == "deposit"
@@ -113,6 +124,7 @@ class PortfolioStore:
             "total_equity": total,
             "net_external_capital": external,
             "investment_profit": total - external,
+            "valuation": valuation,
             "other_holdings_value": profile.other_holdings_value,
             "balances": {bucket.value: value for bucket, value in balances.items()},
             "targets": targets,
@@ -125,7 +137,7 @@ class PortfolioStore:
         if profile is None:
             raise ValueError("请先初始化账户")
         profile.other_holdings_value = amount
-        self.session.commit()
+        self._persist()
         return self.summary()
 
     def deposit(self, amount: Decimal, occurred_on, note: str = "") -> dict:
@@ -139,7 +151,7 @@ class PortfolioStore:
                 details={"note": note},
             )
         )
-        self.session.commit()
+        self._persist()
         return self.summary()
 
     def transfer(self, source: Bucket, target: Bucket, amount: Decimal, occurred_on, note: str = "") -> dict:
@@ -175,7 +187,7 @@ class PortfolioStore:
                     details={"note": note, "counterparty": (target if bucket == source else source).value},
                 )
             )
-        self.session.commit()
+        self._persist()
         return self.summary()
 
     def auto_fund_core(self, purchase_cost: Decimal, occurred_on) -> Decimal:

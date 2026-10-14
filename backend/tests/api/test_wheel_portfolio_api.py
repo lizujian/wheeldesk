@@ -104,9 +104,9 @@ def test_overview_and_over_budget_put_are_serialized_as_one_snapshot() -> None:
         assert "fees" not in put
 
 
-def test_club_put_requires_earnings_confirmation_and_one_active_cycle_per_symbol() -> None:
+def test_club_put_ignores_earnings_and_keeps_one_active_cycle_per_symbol() -> None:
     with wheel_client() as client:
-        rejected = client.post(
+        created = client.post(
             "/api/wheel/portfolio/puts",
             json=put_payload(
                 symbol="AAPL",
@@ -114,20 +114,10 @@ def test_club_put_requires_earnings_confirmation_and_one_active_cycle_per_symbol
                 earnings_confirmed=False,
             ),
         )
-        assert rejected.status_code == 422
-
-        created = client.post(
-            "/api/wheel/portfolio/puts",
-            json=put_payload(
-                symbol="AAPL",
-                batch_number=1,
-                earnings_confirmed=True,
-            ),
-        )
         assert created.status_code == 201, created.text
         put = created.json()["rounds"][0]["puts"][0]
         assert put["symbol"] == "AAPL"
-        assert put["earnings_confirmed"] is True
+        assert put["earnings_confirmed"] is False
         assert put["entry_underlying_price"] == 55.0
 
         duplicate = client.post(
@@ -135,7 +125,7 @@ def test_club_put_requires_earnings_confirmation_and_one_active_cycle_per_symbol
             json=put_payload(
                 symbol="AAPL",
                 batch_number=1,
-                earnings_confirmed=True,
+                earnings_confirmed=False,
                 trade_date="2026-07-25",
             ),
         )
@@ -147,7 +137,7 @@ def test_club_put_requires_earnings_confirmation_and_one_active_cycle_per_symbol
             json=put_payload(
                 symbol="BRK-B",
                 batch_number=1,
-                earnings_confirmed=True,
+                earnings_confirmed=False,
             ),
         )
         assert core_rejected.status_code == 422

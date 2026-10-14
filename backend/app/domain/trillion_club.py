@@ -8,8 +8,7 @@ ZERO = Decimal("0")
 TRILLION_USD = Decimal("1000000000000")
 LEAPS_SLOT_FRACTION = Decimal("0.20")
 
-# The market-cap check is dynamic. This list bounds public-data requests to
-# liquid US-listed names that can plausibly cross the threshold.
+# Initial members of the user-maintained watchlist; no market-cap queries.
 TRILLION_CLUB_CANDIDATES = {
     "AAPL": "Apple",
     "AMZN": "Amazon",
@@ -34,8 +33,8 @@ class ClubMarketState:
     symbol: str
     close: Decimal
     previous_close: Decimal
-    ma200: Decimal
-    rsi14: Decimal
+    ma200: Decimal | None
+    rsi14: Decimal | None
     current_price: Decimal | None
     change_fraction: Decimal | None
     live_quote: bool
@@ -44,6 +43,7 @@ class ClubMarketState:
     market_cap_currency: str | None
     market_cap_live: bool
     completed_sessions: int
+    club_member: bool = False
     two_closes_below_ma200: bool = False
     supports: tuple[SupportLevel, ...] = ()
     next_earnings_date: date | None = None
@@ -74,8 +74,8 @@ class ClubEntryDecision:
     previous_close: Decimal
     change_fraction: Decimal | None
     close: Decimal
-    ma200: Decimal
-    rsi14: Decimal
+    ma200: Decimal | None
+    rsi14: Decimal | None
     market_cap: Decimal | None
     market_cap_as_of: date | None
     market_cap_currency: str | None
@@ -127,15 +127,12 @@ def evaluate_club_entries(
         )
         checks = {
             "qqq_above_ma200": qqq_above_ma200,
-            "stock_above_ma200": market.close > market.ma200,
-            "rsi_below_45": market.rsi14 < Decimal("45"),
+            "stock_above_ma200": market.ma200 is not None and market.close > market.ma200,
+            "rsi_below_45": market.rsi14 is not None and market.rsi14 < Decimal("45"),
             "daily_drop": market.change_fraction is not None
             and market.change_fraction < Decimal("-0.05"),
             "live_quote": market.live_quote,
-            "market_cap": market.market_cap is not None
-            and market.market_cap >= TRILLION_USD
-            and market.market_cap_currency == "USD"
-            and market.market_cap_live,
+            "club_member": market.club_member,
             "history": market.completed_sessions >= 252,
             "weekly_limit": weekly_limit,
             "second_entry": _second_entry_ready(market, symbol_positions),
@@ -193,9 +190,9 @@ def evaluate_club_entries(
     return decisions
 
 
-def is_club_symbol(symbol: str) -> bool:
-    normalized = symbol.upper()
-    return normalized in TRILLION_CLUB_CANDIDATES and normalized not in TRILLION_CLUB_EXCLUSIONS
+def is_club_symbol(symbol: str, members=None) -> bool:
+    normalized = "BRK-B" if symbol.upper() == "BRK.B" else symbol.upper()
+    return normalized in (TRILLION_CLUB_CANDIDATES if members is None else members) and normalized not in TRILLION_CLUB_EXCLUSIONS
 
 
 def is_wheel_club_symbol(symbol: str) -> bool:
@@ -209,7 +206,7 @@ def _second_entry_ready(
 ) -> bool:
     if not positions:
         return True
-    return market.rsi14 < Decimal("40")
+    return market.rsi14 is not None and market.rsi14 < Decimal("40")
 
 
 def _same_market_week(first: date, second: date) -> bool:

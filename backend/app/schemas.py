@@ -141,12 +141,12 @@ class PositionCreate(BaseModel):
                 if not all((self.expiration, self.strike, self.tranche)):
                     raise ValueError("LEAPS 需要到期日、行权价和批次")
                 from app.domain.leaps import validate_leaps_contract
-                from app.domain.trillion_club import is_club_symbol
+                from app.domain.trillion_club import TRILLION_CLUB_EXCLUSIONS
 
                 symbol = self.symbol.upper()
                 if symbol == "TQQQ":
                     raise ValueError("LEAPS 禁止使用 TQQQ")
-                if symbol != "QQQ" and not is_club_symbol(symbol):
+                if symbol in TRILLION_CLUB_EXCLUSIONS | {"VOO", "SCHD", "QLD"}:
                     raise ValueError("LEAPS 标的只允许 QQQ 或万亿俱乐部候选股票")
                 if symbol != "QQQ":
                     if self.tranche > 2:
@@ -234,8 +234,6 @@ class WheelPutCreate(BaseModel):
             raise ValueError("车轮标的只允许 TQQQ 或万亿俱乐部车轮候选股票")
         if self.symbol != "TQQQ" and self.batch_number != 1:
             raise ValueError("万亿俱乐部个股车轮不拆分第二批")
-        if self.symbol != "TQQQ" and not self.earnings_confirmed:
-            raise ValueError("个股 Sell Put 需要确认到期日前无财报")
         return self
 
 

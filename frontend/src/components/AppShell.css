@@ -79,3 +79,15 @@
   .sidebar nav a { position: relative; }
   .nav-signal-count { position: absolute; top: 2px; right: 2px; min-width: 17px; height: 17px; padding: 0 4px; font-size: 8px; }
 }
+
+@media (max-width: 720px) {
+  .app-shell > .mobile-nav { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+  .topbar .global-signal-indicator {
+    min-width: 38px;
+    padding: 7px;
+    grid-template-columns: 18px auto;
+    gap: 6px;
+  }
+  .topbar .global-signal-indicator > span { display: none; }
+  .topbar .primary-button { flex: 0 0 38px; }
+}

@@ -1,3 +1,4 @@
+from app.market.base import stored_quote_metadata
 from dataclasses import asdict
 from datetime import date, datetime
 from decimal import Decimal
@@ -57,8 +58,6 @@ class WheelPortfolioService:
             raise ValueError("核心仓 Sell Put 只允许 BRK.B、VOO、SCHD 或 SPY")
         if not is_core_put and symbol != "TQQQ" and not is_wheel_club_symbol(symbol):
             raise ValueError("车轮标的只允许 TQQQ 或万亿俱乐部车轮候选股票")
-        if not is_core_put and symbol != "TQQQ" and not earnings_confirmed and not broker_reconciled:
-            raise ValueError("个股 Sell Put 需要确认到期日前无财报")
         if not is_core_put and symbol != "TQQQ" and self.has_exposure(symbol) and round_id is None and not broker_reconciled:
             raise ValueError(f"{symbol} 已有活动车轮周期")
         if batch_number not in (1, 2):
@@ -782,11 +781,12 @@ class WheelPortfolioService:
             "quote_last": record.quote_last,
             "quote_iv": record.quote_iv,
             "quote_as_of": record.quote_as_of,
+            **stored_quote_metadata(record),
             "theoretical_low": record.theoretical_low,
             "theoretical_base": record.theoretical_base,
             "theoretical_high": record.theoretical_high,
             "captured_fraction": record.captured_fraction,
-            "early_close_code": record.early_close_code,
+            "early_close_code": record.early_close_code if stored_quote_metadata(record)["quote_quality"] in {None, "legacy", "realtime"} or record.quote_source == "theoretical" else None,
             "early_close_message": record.early_close_message,
             "voided_at": record.voided_at,
             "void_reason": record.void_reason,
@@ -861,6 +861,7 @@ class WheelPortfolioService:
             "quote_last": record.quote_last,
             "quote_iv": record.quote_iv,
             "quote_as_of": record.quote_as_of,
+            **stored_quote_metadata(record),
             "voided_at": record.voided_at,
             "void_reason": record.void_reason,
         }

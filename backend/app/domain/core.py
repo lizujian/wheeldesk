@@ -37,7 +37,7 @@ class CoreBuyInputs:
     drawdown: Decimal
     daily_change: Decimal
     rsi14: Decimal
-    vix: Decimal
+    vix: Decimal | None
     target_gap: Decimal
     available_funding: Decimal
     last_purchase_date: date | None
@@ -170,6 +170,8 @@ def evaluate_core_put(
 
 
 def evaluate_core_buy(inputs: CoreBuyInputs) -> CoreBuyDecision:
+    if inputs.vix is None:
+        return _empty("vix_unavailable")
     if inputs.target_gap <= ZERO:
         return _empty("at_target")
 
@@ -229,7 +231,7 @@ def evaluate_core_portfolio(
     total_target: Decimal,
     total_equity: Decimal,
     available_funding: Decimal,
-    vix: Decimal,
+    vix: Decimal | None,
     ratio_z: Decimal,
     route_confirmation_days: int,
     rotation_confirmation_days: int,
@@ -337,7 +339,7 @@ def _evaluate_asset(
     as_of: date,
     target_gap: Decimal,
     available_funding: Decimal,
-    vix: Decimal,
+    vix: Decimal | None,
 ) -> CoreAssetDecision:
     decision = evaluate_core_buy(
         CoreBuyInputs(
@@ -475,7 +477,7 @@ def _opportunity_score(inputs: CoreBuyInputs) -> int:
     elif inputs.daily_change <= Decimal("-0.01"):
         score += 1
 
-    if inputs.vix >= Decimal("30"):
+    if inputs.vix is not None and inputs.vix >= Decimal("30"):
         score += 1
     return score
 

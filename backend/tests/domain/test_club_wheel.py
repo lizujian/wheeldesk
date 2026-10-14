@@ -20,6 +20,7 @@ def market(**overrides) -> ClubMarketState:
         "market_cap_as_of": date(2026, 6, 30),
         "market_cap_currency": "USD",
         "market_cap_live": True,
+        "club_member": True,
         "completed_sessions": 300,
         "supports": (
             SupportLevel(Decimal("170"), "swing_cluster", 3, Decimal("0.12")),
@@ -67,7 +68,7 @@ def test_club_wheel_keeps_technical_signal_but_flags_budget_and_concentration() 
     assert decision.over_concentration is True
 
 
-def test_club_wheel_blocks_same_week_active_cycle_and_near_earnings() -> None:
+def test_club_wheel_blocks_same_week_and_active_cycle_without_earnings_gate() -> None:
     positions = [
         ClubWheelPositionState(
             put_id=7,
@@ -91,7 +92,8 @@ def test_club_wheel_blocks_same_week_active_cycle_and_near_earnings() -> None:
     assert decision.technical_eligible is False
     assert decision.checks["weekly_limit"] is False
     assert decision.checks["no_active_cycle"] is False
-    assert decision.checks["earnings_clear"] is False
+    assert "earnings_clear" not in decision.checks
+    assert decision.earnings_confirmation_required is False
     assert decision.high_risk_put_ids == (7,)
 
 

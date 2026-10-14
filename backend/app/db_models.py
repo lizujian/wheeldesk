@@ -10,6 +10,33 @@ class Base(DeclarativeBase):
     pass
 
 
+class MarketDataSettings(Base):
+    __tablename__ = "market_data_settings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    provider: Mapped[str] = mapped_column(String(20), default="ibkr")
+    ibkr_host: Mapped[str | None] = mapped_column(String(253), nullable=True)
+    ibkr_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ibkr_client_id: Mapped[int] = mapped_column(Integer, default=71, server_default="71")
+    club_symbols: Mapped[list | None] = mapped_column(JSON, nullable=True)
+
+
+class MarketDataCache(Base):
+    __tablename__ = "market_data_cache"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+
+
+class QuoteMetadata:
+    # fetched_at is a response time, never an invented book update time.
+    quote_vendor: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    quote_quality: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    quote_fetched_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    quote_market_as_of: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class LedgerEvent(Base):
     __tablename__ = "ledger_events"
 
@@ -73,7 +100,7 @@ class WheelRound(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
-class WheelPutLot(Base):
+class WheelPutLot(QuoteMetadata, Base):
     __tablename__ = "wheel_put_lots"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -140,7 +167,7 @@ class WheelShareLot(Base):
         return (self.assignment_strike * self.remaining_quantity).quantize(Decimal("0.01"))
 
 
-class WheelCallLot(Base):
+class WheelCallLot(QuoteMetadata, Base):
     __tablename__ = "wheel_call_lots"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -200,7 +227,7 @@ class BucketBalance(Base):
     amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=Decimal("0"))
 
 
-class PositionRecord(Base):
+class PositionRecord(QuoteMetadata, Base):
     __tablename__ = "positions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -231,6 +258,7 @@ class PositionRecord(Base):
     exit_fees: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=Decimal("0"))
     realized_profit: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
     quote_source: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(300), nullable=True)
     quote_bid: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     quote_ask: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     quote_last: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
@@ -255,7 +283,7 @@ class OtherHoldingRecord(Base):
     )
 
 
-class UnmanagedPositionRecord(Base):
+class UnmanagedPositionRecord(QuoteMetadata, Base):
     __tablename__ = "unmanaged_positions"
 
     id: Mapped[int] = mapped_column(primary_key=True)

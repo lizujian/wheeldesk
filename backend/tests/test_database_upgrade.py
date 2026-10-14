@@ -83,6 +83,19 @@ def test_initialize_database_adds_cost_price_without_losing_exit_records(
     assert profile == (36, 179726, 0)
 
 
+def test_old_market_endpoint_is_not_reused_as_ib_gateway(tmp_path):
+    engine = create_database_engine(tmp_path / "old-market.db")
+    with engine.begin() as connection:
+        connection.exec_driver_sql("CREATE TABLE market_data_settings (id INTEGER PRIMARY KEY, provider VARCHAR(20) NOT NULL, futu_host VARCHAR(253), futu_port INTEGER)")
+        connection.exec_driver_sql("INSERT INTO market_data_settings VALUES (1, 'futu', '127.0.0.1', 11111)")
+    initialize_database(engine)
+    initialize_database(engine)
+    with engine.connect() as connection:
+        row = connection.exec_driver_sql("SELECT provider, ibkr_host, ibkr_port, ibkr_client_id FROM market_data_settings").one()
+    assert row == ("ibkr", None, None, 71)
+    engine.dispose()
+
+
 def test_initialize_database_adds_quote_fields_without_losing_positions(
     tmp_path: Path,
 ) -> None:
@@ -479,6 +492,81 @@ def test_initialize_database_allocates_legacy_pmcc_calls_across_multiple_leaps(
             position_ids[0],
             position_ids[1],
         ]
+
+
+def test_existing_pmcc_links_reserve_stock_for_lowest_strike(tmp_path: Path) -> None:
+    engine = create_database_engine(tmp_path / "stock-first-pmcc.db")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        long_ids = []
+        for strike in (330, 360):
+            position = PositionRecord(
+                bucket="leaps", symbol="AVGO", asset_type="option", direction="long",
+                option_type="call", quantity=1, multiplier=100, entry_price=75,
+                current_price=80, opened_on=date(2026, 9, 3),
+                expiration=date(2027, 9, 17), strike=strike,
+            )
+            session.add(position)
+            session.flush()
+            long_ids.append(position.id)
+        session.add(UnmanagedPositionRecord(
+            category="other", symbol="AVGO", asset_type="equity", direction="long",
+            quantity=100, multiplier=1, entry_price=350, current_price=355,
+        ))
+        for index, strike in enumerate((370, 380, 390)):
+            session.add(UnmanagedPositionRecord(
+                category="leaps_call_wheel" if index < 2 else "other",
+                linked_position_id=long_ids[index] if index < 2 else None,
+                symbol="AVGO", asset_type="option", direction="short", option_type="call",
+                quantity=1, multiplier=100, entry_price=5, current_price=3,
+                opened_on=date(2026, 9, 25), expiration=date(2026, 11, 6), strike=strike,
+            ))
+        session.commit()
+
+    for _ in range(2):
+        initialize_database(engine)
+        with Session(engine) as session:
+            calls = list(session.scalars(select(UnmanagedPositionRecord).where(
+                UnmanagedPositionRecord.option_type == "call",
+            ).order_by(UnmanagedPositionRecord.strike)))
+            assert calls[0].category == "other"
+            assert calls[0].linked_position_id is None
+            assert {call.linked_position_id for call in calls[1:]} == set(long_ids)
+            assert all(call.category == "leaps_call_wheel" for call in calls[1:])
+
+
+def test_closed_legacy_call_does_not_reserve_current_pmcc_coverage(tmp_path: Path) -> None:
+    engine = create_database_engine(tmp_path / "closed-pmcc.db")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        position = PositionRecord(
+            bucket="leaps", symbol="AVGO", asset_type="option", direction="long",
+            option_type="call", quantity=1, multiplier=100, entry_price=75,
+            current_price=80, opened_on=date(2026, 9, 3),
+            expiration=date(2027, 9, 17), strike=330,
+        )
+        session.add(position)
+        session.flush()
+        position_id = position.id
+        for strike, status in [(380, "closed"), (390, "open"), (400, "open")]:
+            session.add(UnmanagedPositionRecord(
+                category="other", symbol="AVGO", asset_type="option",
+                direction="short", option_type="call", quantity=1, multiplier=100,
+                entry_price=5, current_price=3, opened_on=date(2026, 9, 25),
+                expiration=date(2026, 11, 6), strike=strike, status=status,
+                closed_on=date(2026, 10, 12) if status == "closed" else None,
+            ))
+        session.commit()
+
+    for _ in range(2):
+        initialize_database(engine)
+        with Session(engine) as session:
+            active = list(session.scalars(select(UnmanagedPositionRecord).where(
+                UnmanagedPositionRecord.status == "open",
+            ).order_by(UnmanagedPositionRecord.strike)))
+            assert [(call.category, call.linked_position_id) for call in active] == [
+                ("leaps_call_wheel", position_id), ("other", None),
+            ]
 
 
 def test_initialize_database_distributes_legacy_unallocated_once_and_preserves_trades(

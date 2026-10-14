@@ -91,11 +91,12 @@ def test_summary_and_other_holdings_expose_one_linked_pmcc_state() -> None:
         pmcc = summary.json()["capital"]["pmcc"]
         assert pmcc["qqq"]["committed"] == 10000
         assert pmcc["total"]["net_cash_flow"] == 300
-        assert pmcc["states"][0]["status"] == "covered"
+        assert pmcc["states"][0]["covered_contracts"] == 1
+        assert pmcc["states"][0]["short_quantity"] == 1
         assert pmcc["states"][0]["coverage_ratio"] == 1
 
         listing = client.get("/api/other-holdings?include_closed=true")
         assert listing.status_code == 200, listing.text
         payload = listing.json()
-        assert payload["pmcc"]["states"][0]["status"] == "covered"
+        assert payload["pmcc"]["states"][0]["coverage_ratio"] == 1
         assert payload["leaps_call_wheels"][0]["pmcc_state"]["long_position_id"] == long.json()["id"]

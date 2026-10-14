@@ -8,18 +8,18 @@ from sqlalchemy.orm import Session
 from app.db_models import WheelCallLot, WheelPutLot, WheelShareLot
 from app.domain.option_estimator import estimate_put_range, implied_volatility_from_put
 from app.domain.wheel_portfolio import early_close_signal
-from app.market.base import MarketDataError, OptionDataProvider, OptionQuote
+from app.market.base import MarketDataError, OptionDataProvider, OptionQuote, option_quote_usable, quote_metadata
 
 ZERO = Decimal("0")
 
 
 def quote_is_usable(quote: OptionQuote, as_of: date) -> bool:
-    if quote.bid <= ZERO or quote.ask < quote.bid:
+    if not option_quote_usable(quote, as_of):
         return False
     middle = (quote.bid + quote.ask) / 2
     if middle <= ZERO or (quote.ask - quote.bid) / middle > Decimal("0.50"):
         return False
-    return abs((as_of - quote.quoted_at.date()).days) <= 5
+    return True
 
 
 class WheelQuoteService:
@@ -64,6 +64,11 @@ class WheelQuoteService:
             record.theoretical_high = None
             reference = quote.ask
         else:
+            if record.quote_ask is not None and record.quote_source == "public":
+                record.quote_quality = "stale"
+                record.early_close_code = None
+                record.early_close_message = "行情刷新失败，保留上次估值；请在券商确认当前买回价。"
+                return
             if underlying_spot is None:
                 self._clear_quote(record)
                 record.quote_source = "unavailable"
@@ -86,7 +91,7 @@ class WheelQuoteService:
             as_of,
             record.premium,
             reference,
-            record.quote_source or "unavailable",
+            "public" if record.quote_source == "public" and record.quote_quality in {None, "legacy", "realtime"} else "unavailable",
         )
         record.captured_fraction = signal.captured_fraction
         record.early_close_code = signal.code
@@ -104,7 +109,9 @@ class WheelQuoteService:
             self._store_quote(record, quote)
             record.quote_source = "public"
         else:
-            record.quote_source = "unavailable"
+            record.quote_quality = "stale"
+            if record.quote_source != "public":
+                record.quote_source = "unavailable"
 
     def _store_theoretical(
         self,
@@ -154,7 +161,9 @@ class WheelQuoteService:
         record.quote_ask = quote.ask
         record.quote_last = quote.last
         record.quote_iv = quote.implied_volatility
-        record.quote_as_of = quote.quoted_at
+        record.quote_as_of = quote.fetched_at or quote.quoted_at
+        for key, value in quote_metadata(quote).items():
+            setattr(record, key, value)
 
     @staticmethod
     def _clear_quote(record) -> None:
@@ -163,3 +172,7 @@ class WheelQuoteService:
         record.quote_last = None
         record.quote_iv = None
         record.quote_as_of = None
+        record.quote_vendor = None
+        record.quote_quality = None
+        record.quote_fetched_at = None
+        record.quote_market_as_of = None

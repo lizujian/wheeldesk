@@ -9,20 +9,24 @@ from sqlalchemy.orm import Session
 from app.db import get_session
 from app.db_models import LedgerEvent, PositionRecord
 from app.domain.leaps import (
+    ADDITIONAL_LEAPS_ETFS,
     LeapsExitInputs,
     evaluate_leaps_equity_exit,
     evaluate_leaps_exit,
 )
 from app.domain.trillion_club import is_club_symbol
+from app.market.settings import read_settings
 from app.domain.models import Bucket
 from app.schemas import PositionClose, PositionCreate, PositionMark
 from app.services.realized_cash import RealizedCashService
 from app.services.portfolio_store import PortfolioStore
+from app.market.base import stored_quote_metadata
 
 router = APIRouter(prefix="/api/positions", tags=["positions"])
 
 
 def position_payload(position: PositionRecord) -> dict:
+    metadata = stored_quote_metadata(position)
     cost = position.entry_price * position.quantity * position.multiplier
     value = position.current_price * position.quantity * position.multiplier
     unrealized = value - cost if position.status == "open" else None
@@ -36,7 +40,7 @@ def position_payload(position: PositionRecord) -> dict:
                     expiration=position.expiration,
                     as_of=as_of,
                     entry_price=position.entry_price,
-                    current_bid=position.quote_bid,
+                    current_bid=position.quote_bid if metadata["quote_quality"] in {None, "legacy", "realtime"} and not position.last_error else None,
                 )
             )
         )
@@ -54,6 +58,8 @@ def position_payload(position: PositionRecord) -> dict:
                 current_price=position.current_price,
             )
         )
+        if metadata["quote_quality"] not in {None, "legacy", "realtime"} or position.last_error:
+            exit_decision["actionable"] = False
     return {
         "id": position.id,
         "rolled_from_position_id": position.rolled_from_position_id,
@@ -74,8 +80,9 @@ def position_payload(position: PositionRecord) -> dict:
         "delta": position.delta,
         "tranche": position.tranche,
         "leaps_category": (
+            "etf" if position.bucket == Bucket.LEAPS.value and position.symbol in ADDITIONAL_LEAPS_ETFS else
             "club"
-            if position.bucket == Bucket.LEAPS.value and is_club_symbol(position.symbol)
+            if position.bucket == Bucket.LEAPS.value and position.symbol not in {"QQQ", "QLD"}
             else "qqq"
             if position.bucket == Bucket.LEAPS.value
             else None
@@ -91,6 +98,8 @@ def position_payload(position: PositionRecord) -> dict:
         "quote_last": position.quote_last,
         "quote_iv": position.quote_iv,
         "quote_as_of": position.quote_as_of,
+        **metadata,
+        "last_error": position.last_error,
         "peak_bid": position.peak_bid,
         "exit_decision": exit_decision,
     }
@@ -98,6 +107,9 @@ def position_payload(position: PositionRecord) -> dict:
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 def create_position(payload: PositionCreate, session: Session = Depends(get_session)):
+    if payload.bucket == Bucket.LEAPS and payload.symbol.upper() not in {"QQQ", "QLD", *ADDITIONAL_LEAPS_ETFS}:
+        if not is_club_symbol(payload.symbol, read_settings(session).club_symbols):
+            raise HTTPException(status_code=422, detail="请先在设置中将该股票加入万亿俱乐部列表")
     multiplier = 100 if payload.asset_type == "option" else 1
     if payload.bucket == Bucket.CORE:
         try:

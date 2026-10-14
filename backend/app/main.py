@@ -7,6 +7,7 @@ from app.api import (
     ibkr_import,
     ledger,
     market,
+    market_settings,
     other_holdings,
     portfolio,
     profit_ledger,
@@ -18,18 +19,23 @@ from app.api import (
     wheel_portfolio,
 )
 from app.db import initialize_database
+from app.market.factory import close_providers
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     initialize_database()
-    yield
+    try:
+        yield
+    finally:
+        close_providers()
 
 app = FastAPI(title="Wheel Monitor", version="0.1.0", lifespan=lifespan)
 app.include_router(portfolio.router)
 app.include_router(other_holdings.router)
 app.include_router(profit_ledger.router)
 app.include_router(market.router)
+app.include_router(market_settings.router)
 app.include_router(ledger.router)
 app.include_router(strategies.router)
 app.include_router(positions.router)

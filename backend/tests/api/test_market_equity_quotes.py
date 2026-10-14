@@ -1,5 +1,5 @@
 from contextlib import contextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi.testclient import TestClient
@@ -7,12 +7,12 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.api.market import get_market_provider
+from app.api.market import get_market_provider, get_vix_provider
 from app.db import get_session
 from app.db_models import Base
 from app.domain.indicators import DailyBar
 from app.main import app
-from app.market.base import MarketDataError, MarketSeries
+from app.market.base import MarketDataError, MarketSeries, SessionQuote
 
 
 class EquityProvider:
@@ -23,6 +23,8 @@ class EquityProvider:
         if symbol in self.fail_symbols:
             raise MarketDataError(f"{symbol} unavailable")
         prices = {"QQQ": "500", "TQQQ": "80", "BRK.B": "510", "VOO": "600", "SCHD": "33", "VIX": "18", "AAPL": "220", "QLD": "90"}
+        if symbol not in prices:
+            raise MarketDataError(f"{symbol} unavailable")
         close = Decimal(prices[symbol])
         start = date(2025, 9, 26)
         bars = [
@@ -55,6 +57,7 @@ def quote_client(provider: EquityProvider):
 
     app.dependency_overrides[get_session] = override_session
     app.dependency_overrides[get_market_provider] = lambda: provider
+    app.dependency_overrides[get_vix_provider] = app.dependency_overrides[get_market_provider]
     try:
         yield TestClient(app)
     finally:
@@ -71,6 +74,47 @@ def initialize(client: TestClient) -> None:
             "opening_date": "2026-07-22",
         },
     )
+
+
+def test_vix_context_serializes_snapshot_and_history_without_changing_strategy_close():
+    class VixProvider(EquityProvider):
+        history_failed = False
+
+        def session_quote(self, symbol):
+            if symbol != 'VIX':
+                raise MarketDataError('snapshot unavailable')
+            now = datetime.now(timezone.utc)
+            return SessionQuote('VIX', Decimal(12), Decimal(18), now, date.today(), 'regular', 'ibkr', 'delayed', now)
+
+        def daily_bars(self, symbol, limit=300):
+            if symbol != 'VIX':
+                return super().daily_bars(symbol, limit)
+            return MarketSeries('VIX', [DailyBar(date.today()-timedelta(days=i), Decimal(18), Decimal(25), Decimal(10), Decimal(18), 0)
+                for i in range(400, 0, -1)][-limit:], 'ibkr')
+
+        def vix_history(self):
+            if self.history_failed:
+                raise MarketDataError('VIX history unavailable')
+            return self.daily_bars('VIX', 400)
+
+    provider = VixProvider()
+    with quote_client(provider) as client:
+        initialize(client)
+        for failed in [False, True]:
+            provider.history_failed = failed
+            response = client.post('/api/market/refresh')
+            assert response.status_code == 200, response.text
+            payload = response.json()
+            assert payload['market']['vix']['price'] == 18
+            assert payload['vix_context']['price'] == 12
+            assert payload['vix_context']['price_kind'] == 'snapshot'
+            if failed:
+                assert payload['vix_context']['percentile_fraction'] is None
+                assert payload['vix_context']['history_error'] == 'VIX history unavailable'
+            else:
+                assert payload['vix_context']['percentile_fraction'] == 0
+                assert payload['vix_context']['high_52w'] == 25
+                assert payload['vix_context']['sample_size'] == 364
 
 
 def test_refresh_updates_each_public_equity_without_failing_the_batch() -> None:

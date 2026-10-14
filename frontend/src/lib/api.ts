@@ -5,6 +5,9 @@ import type {
   IbkrImportPreview,
   LedgerEvent,
   MarketSnapshot,
+  MarketRefreshScope,
+  MarketSettings,
+  IbkrConnectionStatus,
   OtherHoldingListing,
   PortfolioSummary,
   Position,
@@ -21,7 +24,10 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   })
   if (!response.ok) {
     const payload = await response.json().catch(() => ({ detail: '请求失败' }))
-    throw new Error(payload.detail || `请求失败 (${response.status})`)
+    const detail = Array.isArray(payload.detail)
+      ? payload.detail.map((issue: { msg?: string }) => issue.msg ?? '设置值无效').join('；')
+      : payload.detail
+    throw new Error(detail || `请求失败 (${response.status})`)
   }
   if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
@@ -30,7 +36,10 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 export const api = {
   portfolio: () => request<PortfolioSummary>('/portfolio/summary'),
   initialize: (payload: unknown) => request<PortfolioSummary>('/portfolio/initialize', { method: 'POST', body: JSON.stringify(payload) }),
-  refresh: () => request<MarketSnapshot>('/market/refresh', { method: 'POST' }),
+  refresh: (scope: MarketRefreshScope = 'stocks') => request<MarketSnapshot>(`/market/refresh?scope=${scope}`, { method: 'POST' }),
+  marketSettings: () => request<MarketSettings>('/settings/market'),
+  saveMarketSettings: (payload: Pick<MarketSettings, 'provider' | 'ibkr_host' | 'ibkr_port' | 'ibkr_client_id' | 'club_symbols'>) => request<MarketSettings>('/settings/market', { method: 'PUT', body: JSON.stringify(payload) }),
+  testIbkrConnection: (payload: Pick<MarketSettings, 'provider' | 'ibkr_host' | 'ibkr_port' | 'ibkr_client_id'>) => request<IbkrConnectionStatus>('/settings/market/test', { method: 'POST', body: JSON.stringify(payload) }),
   wheelOverview: () => request<WheelOverview>('/wheel/overview'),
   positions: (includeClosed = false) => request<Position[]>(`/positions${includeClosed ? '?include_closed=true' : ''}`),
   otherHoldings: (includeClosed = false) => request<OtherHoldingListing>(`/other-holdings${includeClosed ? '?include_closed=true' : ''}`),

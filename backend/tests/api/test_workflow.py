@@ -9,7 +9,7 @@ from app.db import get_session
 from app.db_models import Base
 from app.main import app
 from app.market.sample import SampleMarketDataProvider
-from app.api.market import get_market_provider
+from app.api.market import get_market_provider, get_vix_provider
 
 
 def test_manual_workflow_from_onboarding_to_profit_redistribution() -> None:
@@ -29,6 +29,7 @@ def test_manual_workflow_from_onboarding_to_profit_redistribution() -> None:
     app.dependency_overrides[get_market_provider] = lambda: SampleMarketDataProvider(
         as_of=date(2026, 7, 9)
     )
+    app.dependency_overrides[get_vix_provider] = app.dependency_overrides[get_market_provider]
     client = TestClient(app)
 
     initialized = client.post(

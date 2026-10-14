@@ -144,7 +144,7 @@ describe('other holdings page', () => {
     }
     const secondAvgoCall: OtherHolding = {
       ...listing.records.find((record) => record.id === 5)!,
-      id: 8, opened_on: '2026-09-23', expiration: '2026-11-20', strike: 420,
+      id: 8, opened_on: '2026-08-01', expiration: '2026-11-20', strike: 420,
     }
     const listingWithAvgoShares = { ...listing, records: [...listing.records, avgoShares, secondAvgoCall] }
     render(<OtherHoldingsPage listing={listingWithAvgoShares} wheel={wheel} />)

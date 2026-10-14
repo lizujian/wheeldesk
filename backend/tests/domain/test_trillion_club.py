@@ -23,6 +23,7 @@ def market(**overrides) -> ClubMarketState:
         "market_cap_as_of": date(2026, 6, 30),
         "market_cap_currency": "USD",
         "market_cap_live": True,
+        "club_member": True,
         "completed_sessions": 300,
     }
     values.update(overrides)
@@ -106,10 +107,9 @@ def test_shared_budget_cap_warns_without_hiding_the_technical_signal() -> None:
     assert decision.suggested_amount == Decimal("0")
 
 
-def test_market_cap_history_and_trend_checks_are_required() -> None:
+def test_membership_history_and_trend_checks_are_required() -> None:
     cases = [
-        (market(market_cap=Decimal("999999999999")), "market_cap"),
-        (market(market_cap_currency="TWD"), "market_cap"),
+        (market(club_member=False), "club_member"),
         (market(completed_sessions=251), "history"),
         (market(close=Decimal("275")), "stock_above_ma200"),
         (market(rsi14=Decimal("45")), "rsi_below_45"),

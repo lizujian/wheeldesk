@@ -127,6 +127,29 @@ def pmcc_budget(total_equity: Decimal) -> PMCCBudget:
     )
 
 
+def call_contract_key(call) -> tuple:
+    return (call.symbol, call.expiration, call.strike)
+
+
+def share_covered_call_keys(calls: Iterable, shares_by_symbol: dict[str, Decimal]) -> set[tuple]:
+    """Reserve actual shares for the lowest-strike short calls first."""
+    available = dict(shares_by_symbol)
+    covered: set[tuple] = set()
+    for call in sorted(
+        calls,
+        key=lambda call: (
+            call.strike if call.strike is not None else Decimal("Infinity"),
+            call.expiration or date.max,
+            getattr(call, "id", 0),
+        ),
+    ):
+        required = abs(call.quantity) * getattr(call, "multiplier", 100)
+        if required > ZERO and available.get(call.symbol, ZERO) >= required:
+            available[call.symbol] -= required
+            covered.add(call_contract_key(call))
+    return covered
+
+
 def is_pmcc_long(position) -> bool:
     return (
         getattr(position, "bucket", None) == "leaps"

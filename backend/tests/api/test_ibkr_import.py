@@ -1,5 +1,6 @@
 from contextlib import contextmanager
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -235,7 +236,7 @@ Open Positions,Data,Summary,Stocks,USD,SCHD,,10,1,32,320,33,330,10,,,,
 
 
 def test_ibkr_import_classifies_brk_puts_as_core_accumulation() -> None:
-    from app.api.market import get_market_provider, get_option_provider
+    from app.api.market import get_market_provider, get_option_provider, get_vix_provider
     from app.market.base import MarketDataError
     from app.market.sample import SampleMarketDataProvider
 
@@ -290,6 +291,7 @@ Open Positions,Data,Summary,Equity and Index Options,USD,BRK B 02OCT26 500 P,-1,
 
         provider = CoreProvider()
         app.dependency_overrides[get_market_provider] = lambda: provider
+        app.dependency_overrides[get_vix_provider] = app.dependency_overrides[get_market_provider]
         app.dependency_overrides[get_option_provider] = lambda: provider
         refreshed = client.post("/api/market/refresh")
         assert refreshed.status_code == 200, refreshed.text
@@ -328,6 +330,41 @@ Open Positions,Data,Summary,Equity and Index Options,USD,SPY 02OCT26 735 P,-1,10
         wheel = client.get("/api/wheel/overview").json()
         assert wheel["core_puts"][0]["symbol"] == "SPY"
         assert client.get("/api/other-holdings").json()["records"] == []
+
+
+@pytest.mark.parametrize('symbol', ['DRAM', 'SOXX'])
+@pytest.mark.parametrize('legacy_long', [False, True])
+def test_etf_pmcc_imports_both_legs_without_manual_club_membership_and_is_idempotent(symbol, legacy_long):
+    report = f'''Statement,Header,Field Name,Field Value
+Statement,Data,Period,"October 13, 2026"
+Open Positions,Header,DataDiscriminator,Asset Category,Currency,Symbol,Quantity,Mult,Cost Price,Cost Basis,Close Price,Value,Unrealized P/L,Expiry,Strike,Put/Call,Code
+Open Positions,Data,Summary,Equity and Index Options,USD,{symbol} 30OCT26 55 C,-1,100,1.52,-152,1.88,-188,-36,2026-10-30,55,C,
+Open Positions,Data,Summary,Equity and Index Options,USD,{symbol} 17JUN27 50 C,1,100,10.68,1068,10.65,1065,-3,2027-06-17,50,C,
+'''
+    with import_client() as client:
+        client.put('/api/settings/market', json={'club_symbols': []})
+        if legacy_long:
+            from datetime import date
+            from app.db_models import UnmanagedPositionRecord
+            generator = app.dependency_overrides[get_session]()
+            session = next(generator)
+            session.add(UnmanagedPositionRecord(category='other', symbol=symbol, asset_type='option',
+                direction='long', option_type='call', quantity=1, multiplier=100, entry_price=10.68,
+                current_price=10.65, opened_on=date(2026, 10, 13), expiration=date(2027, 6, 17), strike=50))
+            session.commit()
+            generator.close()
+        for _ in range(2):
+            result = client.post('/api/imports/ibkr/auto', json={'filename': 'etf.csv', 'content': report})
+            assert result.status_code == 200, result.text
+            positions = client.get('/api/positions').json()
+            longs = [row for row in positions if row['symbol'] == symbol]
+            assert len(longs) == 1
+            assert longs[0]['leaps_category'] == 'etf'
+            listing = client.get('/api/other-holdings').json()
+            assert all(row['symbol'] != symbol for row in listing['records'])
+            calls = [row for row in listing['leaps_call_wheels'] if row['symbol'] == symbol]
+            assert len(calls) == 1 and calls[0]['linked_position_id'] == longs[0]['id']
+            assert calls[0]['pmcc_state']['coverage_ratio'] == 1
 
 
 def test_ibkr_import_classifies_and_closes_leaps_sell_call() -> None:
@@ -436,7 +473,149 @@ Open Positions,Data,Summary,Equity and Index Options,USD,AVGO 23OCT26 400 C,-1,1
             for state in listing["pmcc"]["states"]
             if state["long_position_id"] == long_ids[0]
         )
-        assert state["status"] == "covered"
+        assert state["coverage_ratio"] == 1
+        assert state["covered_contracts"] == 1
+
+
+@pytest.mark.parametrize("already_imported", [False, True])
+def test_ibkr_import_reuses_pmcc_coverage_when_short_call_closes_in_same_report(
+    already_imported: bool,
+) -> None:
+    initial_report = '''Statement,Header,Field Name,Field Value
+Statement,Data,Period,"September 25, 2026"
+Open Positions,Header,DataDiscriminator,Asset Category,Currency,Symbol,Quantity,Mult,Cost Price,Cost Basis,Close Price,Value,Unrealized P/L
+Open Positions,Data,Summary,Equity and Index Options,USD,AVGO 23OCT26 380 C,-1,100,5,-500,4,-400,100
+'''
+    roll_report = '''Statement,Header,Field Name,Field Value
+Statement,Data,Period,"October 12, 2026"
+Open Positions,Header,DataDiscriminator,Asset Category,Currency,Symbol,Quantity,Mult,Cost Price,Cost Basis,Close Price,Value,Unrealized P/L
+Open Positions,Data,Summary,Equity and Index Options,USD,AVGO 06NOV26 390 C,-1,100,3.64,-364,3.41,-341,23
+Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,Code
+Trades,Data,Order,Equity and Index Options,USD,AVGO 23OCT26 380 C,"2026-10-12, 12:51:13",1,1.75,1.65,-175,0,500,325,0,C
+'''
+    with import_client() as client:
+        long = client.post(
+            "/api/positions",
+            json={
+                "bucket": "leaps", "symbol": "AVGO", "asset_type": "option",
+                "direction": "long", "option_type": "call", "quantity": 1,
+                "entry_price": 75, "opened_on": "2026-09-03",
+                "expiration": "2027-09-17", "strike": 330, "tranche": 1,
+            },
+        )
+        assert long.status_code == 201, long.text
+        initial = client.post(
+            "/api/imports/ibkr/auto",
+            json={"filename": "initial-pmcc.csv", "content": initial_report},
+        )
+        assert initial.status_code == 200, initial.text
+
+        if already_imported:
+            closing_report = roll_report[roll_report.index("Trades,Header"):]
+            closed = client.post(
+                "/api/imports/ibkr/auto",
+                json={"filename": "close-pmcc.csv", "content": closing_report},
+            )
+            assert closed.status_code == 200, closed.text
+            misplaced = client.post(
+                "/api/other-holdings",
+                json={
+                    "symbol": "AVGO", "asset_type": "option", "direction": "short",
+                    "option_type": "call", "quantity": 1, "entry_price": 3.64,
+                    "current_price": 3.41, "opened_on": "2026-10-12",
+                    "expiration": "2026-11-06", "strike": 390,
+                },
+            )
+            assert misplaced.status_code == 201, misplaced.text
+
+        preview = client.post(
+            "/api/imports/ibkr/preview",
+            json={"filename": "roll-pmcc.csv", "content": roll_report},
+        ).json()
+        replacement = next(row for row in preview["rows"] if "2026-11-06" in row["instrument"])
+        assert replacement["action"] == ("update_leaps_call" if already_imported else "create_leaps_call")
+        if not already_imported:
+            incomplete = client.post(
+                "/api/imports/ibkr/confirm",
+                json={
+                    "filename": "roll-pmcc.csv", "content": roll_report,
+                    "selected_fingerprints": [replacement["fingerprint"]],
+                    "overrides": {}, "confirmation": "IMPORT",
+                },
+            )
+            assert incomplete.status_code == 409, incomplete.text
+            assert "覆盖" in incomplete.json()["detail"]
+
+        rolled = client.post(
+            "/api/imports/ibkr/auto",
+            json={"filename": "roll-pmcc.csv", "content": roll_report},
+        )
+        assert rolled.status_code == 200, rolled.text
+        listing = client.get("/api/other-holdings?include_closed=true").json()
+        active = [call for call in listing["leaps_call_wheels"] if call["status"] == "open"]
+        assert [(call["expiration"], call["strike"], call["linked_position_id"]) for call in active] == [
+            ("2026-11-06", 390, long.json()["id"]),
+        ]
+        assert listing["records"] == []
+        assert len(listing["leaps_call_wheels"]) == 2
+        if already_imported:
+            assert active[0]["id"] == misplaced.json()["id"]
+        previous = next(call for call in listing["leaps_call_wheels"] if call["status"] == "closed")
+        assert previous["realized_profit"] == 325
+        repeated = client.post(
+            "/api/imports/ibkr/auto",
+            json={"filename": "roll-pmcc.csv", "content": roll_report},
+        )
+        assert repeated.status_code == 200, repeated.text
+        assert repeated.json()["imported"] == 0
+
+
+@pytest.mark.parametrize("strikes", [(370, 380, 390), (390, 380, 370)])
+def test_ibkr_import_reserves_shares_for_lowest_strike_before_pmcc(strikes) -> None:
+    header = '''Statement,Header,Field Name,Field Value
+Statement,Data,Period,"October 12, 2026"
+Open Positions,Header,DataDiscriminator,Asset Category,Currency,Symbol,Quantity,Mult,Cost Price,Cost Basis,Close Price,Value,Unrealized P/L
+'''
+    calls = "".join(
+        f"Open Positions,Data,Summary,Equity and Index Options,USD,AVGO 06NOV26 {strike} C,-1,100,5,-500,4,-400,100\n"
+        for strike in strikes
+    )
+    with import_client() as client:
+        for tranche, strike in enumerate((330, 360), 1):
+            long = client.post("/api/positions", json={
+                "bucket": "leaps", "symbol": "AVGO", "asset_type": "option",
+                "direction": "long", "option_type": "call", "quantity": 1,
+                "entry_price": 75, "opened_on": "2026-09-03",
+                "expiration": "2027-09-17", "strike": strike, "tranche": tranche,
+            })
+            assert long.status_code == 201, long.text
+        # First import without shares, then add the stock snapshot. Existing
+        # PMCC links must move if the lowest strike was previously a PMCC call.
+        imported = client.post("/api/imports/ibkr/auto", json={
+            "filename": "calls.csv", "content": header + calls,
+        })
+        assert imported.status_code == 200, imported.text
+        report = header + calls + "Open Positions,Data,Summary,Stocks,USD,AVGO,100,1,350,35000,355,35500,500\n"
+        for attempt in range(2):
+            imported = client.post("/api/imports/ibkr/auto", json={
+                "filename": "calls-with-shares.csv", "content": report,
+            })
+            assert imported.status_code == 200, imported.text
+            listing = client.get("/api/other-holdings").json()
+            assert {call["strike"] for call in listing["leaps_call_wheels"]} == {380, 390}
+            stock_call = next(call for call in listing["records"] if call["option_type"] == "call")
+            assert stock_call["strike"] == 370
+            assert stock_call["linked_position_id"] is None
+            assert len(listing["records"]) == 2
+            assert all(call["pmcc_state"]["coverage_ratio"] == 1 for call in listing["leaps_call_wheels"])
+            categories = {
+                call["id"]: "leaps_call_wheel" for call in listing["leaps_call_wheels"]
+            }
+            categories.update({call["id"]: "unmanaged_position" for call in listing["records"]})
+            for imported_row in client.get("/api/imports/ibkr/history").json():
+                assert imported_row["entity_type"] == categories[imported_row["entity_id"]]
+            if attempt:
+                assert imported.json()["imported"] == 0
 
 
 def test_ibkr_import_classifies_qld_sell_call_as_leaps_wheel() -> None:
@@ -729,7 +908,8 @@ def test_trade_rows_close_strategy_and_other_positions_and_record_intraday_round
         assert repeated["summary"]["selected"] == 0
 
 
-def test_auto_import_links_two_contract_leaps_roll_and_is_idempotent() -> None:
+@pytest.mark.parametrize("remove_member", [False, True])
+def test_auto_import_links_two_contract_leaps_roll_and_is_idempotent(remove_member) -> None:
     with import_client() as client:
         opened = client.post(
             "/api/positions",
@@ -749,6 +929,8 @@ def test_auto_import_links_two_contract_leaps_roll_and_is_idempotent() -> None:
         )
         assert opened.status_code == 201, opened.text
         previous_id = opened.json()["id"]
+        if remove_member:
+            assert client.put("/api/settings/market", json={"club_symbols": []}).status_code == 200
 
         imported = client.post(
             "/api/imports/ibkr/auto",

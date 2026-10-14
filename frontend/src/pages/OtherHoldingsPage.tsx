@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 
 import { formatMoney } from '../components/AllocationChart'
+import { quoteDescription } from '../lib/market'
 import { putHasLiveExposure } from './WheelPage'
 import type { OtherHolding, OtherHoldingListing, WheelOverview, WheelPutLot, WheelRound } from '../lib/types'
 import './WheelPage.css'
@@ -135,7 +136,7 @@ function roundCashReceived(round: WheelRound) {
 function roundCashLabel(value: number) { return value >= 0 ? '共收' : '共付' }
 
 function putQuoteLabel(put: WheelPutLot) {
-  if (put.quote_source === 'public') return put.quote_as_of ?? '公开报价'
+  if (put.quote_source === 'public') return quoteDescription(put) || put.quote_as_of || '公开报价'
   if (put.quote_source === 'theoretical') return '理论估算'
   return '等待行情刷新'
 }
@@ -162,7 +163,9 @@ function findShareCoveredCalls(records: OtherHolding[]) {
   const shares = new Map<number, { shareCount: number; callCount: number }>()
   const shortCalls = records
     .filter((record) => record.status === 'open' && isSellCall(record))
-    .sort((left, right) => (left.opened_on ?? '').localeCompare(right.opened_on ?? '') || left.id - right.id)
+    .sort((left, right) => (left.strike ?? Infinity) - (right.strike ?? Infinity)
+      || (left.expiration ?? '').localeCompare(right.expiration ?? '')
+      || (left.opened_on ?? '').localeCompare(right.opened_on ?? '') || left.id - right.id)
 
   for (const call of shortCalls) {
     const lots = sharesBySymbol.get(call.symbol) ?? []
@@ -213,7 +216,7 @@ function HoldingRow({ record, wheelCoveredShares = 0, wheelCoveredCallCount = 0,
     <span>{nullableMoney(isOpen ? record.current_price : record.exit_price)}</span>
     <strong>{nullableMoney(isOpen ? record.current_value : record.realized_profit)}</strong>
     <span className={result === null ? '' : result >= 0 ? 'positive' : 'negative'}>{isOpen ? nullableMoney(result) : record.closed_on ?? '-'}</span>
-    <small className={`quote-state ${record.quote_status}`}>{isOpen ? quoteLabel(record) : '已退出'}</small>
+    <small className={`quote-state ${record.quote_status}`} title={record.last_error ?? undefined}>{isOpen ? quoteLabel(record) : '已退出'}{isOpen && record.last_error && <span className="quote-provenance error"> · {record.last_error}</span>}</small>
   </div>
 }
 
@@ -246,6 +249,6 @@ function formatQuantity(record: OtherHolding) {
 function nullableMoney(value: number | null) { return value === null ? '-' : formatMoney(value) }
 
 function quoteLabel(record: OtherHolding) {
-  if (record.quote_status === 'updated') return record.quote_as_of ?? '已更新'
+  if (record.quote_status === 'updated') return quoteDescription(record) || record.quote_as_of || '已更新'
   return record.quote_status === 'stale' ? '本次刷新未更新' : '暂无有效报价'
 }

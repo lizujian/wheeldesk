@@ -40,6 +40,15 @@ SessionLocal = sessionmaker(engine, expire_on_commit=False, class_=Session)
 
 def initialize_database(selected_engine: Engine = engine) -> None:
     Base.metadata.create_all(selected_engine)
+    market_columns = {column["name"] for column in inspect(selected_engine).get_columns("market_data_settings")}
+    for name, sql_type in {"ibkr_host": "VARCHAR(253)", "ibkr_port": "INTEGER",
+                           "ibkr_client_id": "INTEGER NOT NULL DEFAULT 71", "club_symbols": "JSON"}.items():
+        if name not in market_columns:
+            with selected_engine.begin() as connection:
+                connection.exec_driver_sql(f"ALTER TABLE market_data_settings ADD COLUMN {name} {sql_type}")
+    with selected_engine.begin() as connection:
+        # Old broker endpoints must never be interpreted as IB Gateway ports.
+        connection.exec_driver_sql("UPDATE market_data_settings SET provider = 'ibkr' WHERE provider != 'ibkr'")
     exit_position_columns = {
         column["name"]
         for column in inspect(selected_engine).get_columns("exit_positions")
@@ -70,6 +79,7 @@ def initialize_database(selected_engine: Engine = engine) -> None:
     additions = {
         "rolled_from_position_id": "INTEGER REFERENCES positions(id)",
         "quote_source": "VARCHAR(30)",
+        "last_error": "VARCHAR(300)",
         "quote_bid": "NUMERIC(18, 4)",
         "quote_ask": "NUMERIC(18, 4)",
         "quote_last": "NUMERIC(18, 4)",
@@ -109,6 +119,17 @@ def initialize_database(selected_engine: Engine = engine) -> None:
                 connection.exec_driver_sql(
                     f"ALTER TABLE wheel_put_lots ADD COLUMN {name} {sql_type}"
                 )
+    for table in ("positions", "unmanaged_positions", "wheel_put_lots", "wheel_call_lots"):
+        columns = {column["name"] for column in inspect(selected_engine).get_columns(table)}
+        for name, sql_type in {
+            "quote_vendor": "VARCHAR(30)",
+            "quote_quality": "VARCHAR(30)",
+            "quote_fetched_at": "DATETIME",
+            "quote_market_as_of": "DATETIME",
+        }.items():
+            if name not in columns:
+                with selected_engine.begin() as connection:
+                    connection.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}")
     _migrate_legacy_unallocated(selected_engine)
     _migrate_legacy_other_holdings(selected_engine)
     _migrate_strategy_positions(selected_engine)
@@ -197,10 +218,34 @@ def _migrate_legacy_other_holdings(selected_engine: Engine) -> None:
 def _migrate_strategy_positions(selected_engine: Engine) -> None:
     """Reclassify already imported strategy legs after the taxonomy changed."""
     from app.domain.core import CORE_PUT_SYMBOLS
-    from app.domain.leaps import LEAPS_CALL_WHEEL_CATEGORY
+    from app.domain.leaps import ADDITIONAL_LEAPS_ETFS, LEAPS_CALL_WHEEL_CATEGORY
+    from app.domain.pmcc import PMCC_CATEGORIES, call_contract_key, share_covered_call_keys
+    from app.services.etf_pmcc import reclassify_etf_pmcc
 
     with Session(selected_engine) as session:
-        changed = False
+        changed = reclassify_etf_pmcc(session)
+        active_calls = list(session.scalars(select(UnmanagedPositionRecord).where(
+            UnmanagedPositionRecord.status == "open",
+            UnmanagedPositionRecord.asset_type == "option",
+            UnmanagedPositionRecord.direction == "short",
+            UnmanagedPositionRecord.option_type == "call",
+        )))
+        shares: dict[str, Decimal] = {}
+        for holding in session.scalars(select(UnmanagedPositionRecord).where(
+            UnmanagedPositionRecord.status == "open",
+            UnmanagedPositionRecord.asset_type == "equity",
+            UnmanagedPositionRecord.direction == "long",
+            UnmanagedPositionRecord.symbol != "QLD",
+        )):
+            shares[holding.symbol] = shares.get(holding.symbol, Decimal("0")) + holding.quantity
+        share_calls = share_covered_call_keys(active_calls, shares)
+        for call in active_calls:
+            if call_contract_key(call) in share_calls and call.category in PMCC_CATEGORIES:
+                call.category = "other"
+                call.linked_position_id = None
+                _update_import_entity(session, call.id, entity_type="unmanaged_position", entity_id=call.id)
+                changed = True
+        session.flush()
         strategy_calls = list(
             session.scalars(
                 select(UnmanagedPositionRecord).where(
@@ -211,6 +256,7 @@ def _migrate_strategy_positions(selected_engine: Engine) -> None:
                 )
             )
         )
+        strategy_calls.sort(key=lambda record: (record.status != "open", record.id))
         allocated: dict[int, Decimal] = {}
         existing_pmcc_calls = session.scalars(
             select(UnmanagedPositionRecord).where(
@@ -225,6 +271,12 @@ def _migrate_strategy_positions(selected_engine: Engine) -> None:
                 allocated.get(call.linked_position_id, Decimal("0")) + call.quantity
             )
         for record in strategy_calls:
+            if record.symbol in ADDITIONAL_LEAPS_ETFS:
+                # ETF active pairs were handled above. Old covered-call history
+                # must not be attached to a subsequently purchased Long Call.
+                continue
+            if record.status == "open" and call_contract_key(record) in share_calls:
+                continue
             if record.symbol == "QLD":
                 # A QLD replacement position covers one call with 100 shares.
                 required_quantity = record.quantity * Decimal("100")
@@ -278,9 +330,12 @@ def _migrate_strategy_positions(selected_engine: Engine) -> None:
                 continue
             record.category = LEAPS_CALL_WHEEL_CATEGORY
             record.linked_position_id = candidate.id
-            allocated[candidate.id] = (
-                allocated.get(candidate.id, Decimal("0")) + required_quantity
-            )
+            # History may be linked for display, but only open calls consume
+            # coverage. A closed legacy record must not block a replacement.
+            if record.status == "open":
+                allocated[candidate.id] = (
+                    allocated.get(candidate.id, Decimal("0")) + required_quantity
+                )
             _update_import_entity(
                 session,
                 record.id,
@@ -367,7 +422,7 @@ def _update_import_entity(
 ) -> None:
     rows = session.scalars(
         select(BrokerImportRecord).where(
-            BrokerImportRecord.entity_type == "unmanaged_position",
+            BrokerImportRecord.entity_type.in_({"unmanaged_position", "leaps_call_wheel"}),
             BrokerImportRecord.entity_id == unmanaged_id,
         )
     )

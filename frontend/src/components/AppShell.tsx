@@ -12,6 +12,7 @@ import {
 import { NavLink } from 'react-router-dom'
 import type { ReactNode } from 'react'
 import type { MarketSnapshot } from '../lib/types'
+import { marketSourceLabel } from '../lib/market'
 import './AppShell.css'
 
 const destinations = [
@@ -50,7 +51,7 @@ export function AppShell({ children, market, refreshing, onRefresh, signalCount,
           <div className="mobile-brand">WheelDesk</div>
           <div className="data-state">
             {market ? (
-              <><span className={`source-badge ${market.source}`}>{market.source === 'sample' ? '模拟数据' : '公开行情'}</span><span>{market.as_of}</span>{market.stale && <strong>数据已过期</strong>}</>
+              <><span className={`source-badge ${market.source}`}>{marketSourceLabel(market)}</span><span>{market.as_of}</span>{market.stale && <strong>数据已过期</strong>}{Boolean(market.errors?.length) && <strong>部分行情不可用</strong>}</>
             ) : <span>尚未刷新行情</span>}
           </div>
           <NavLink className={`global-signal-indicator ${signalCount ? 'active' : ''} ${criticalSignalCount ? 'critical' : ''}`} to="/signals" aria-label={signalCount ? `${signalCount} 条待处理信号` : '暂无待处理信号'}>
@@ -58,7 +59,7 @@ export function AppShell({ children, market, refreshing, onRefresh, signalCount,
             <span><strong>{signalCount ? `${signalCount} 条待处理` : '信号已处理'}</strong><small>{criticalSignalCount ? `${criticalSignalCount} 条高危` : signalCount ? '点击查看建议' : '查看近期记录'}</small></span>
             {signalCount > 0 && <b>{signalCount > 99 ? '99+' : signalCount}</b>}
           </NavLink>
-          <button className="primary-button" onClick={onRefresh} disabled={refreshing} title="刷新行情">
+          <button className="primary-button" onClick={onRefresh} disabled={refreshing} title="刷新股票、ETF、VIX 和股价指标；IV 与期权价格在重新加载页面时更新">
             <RefreshCw size={16} className={refreshing ? 'spinning' : ''} />{refreshing ? '刷新中' : '刷新行情'}
           </button>
         </header>

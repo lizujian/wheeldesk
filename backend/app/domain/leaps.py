@@ -7,6 +7,7 @@ PMCC_CATEGORY = "pmcc"
 # Kept as the storage value for historical IBKR imports. The PMCC domain
 # model treats both this value and the new category as the same strategy.
 LEAPS_CALL_WHEEL_CATEGORY = "leaps_call_wheel"
+ADDITIONAL_LEAPS_ETFS = ("DRAM", "SOXX")
 
 
 @dataclass(frozen=True)

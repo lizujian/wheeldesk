@@ -13,6 +13,7 @@ dependencies = [
   "pydantic>=2.9,<3",
   "sqlalchemy>=2.0,<3",
   "uvicorn[standard]>=0.32,<1",
+  "ib_async==2.1.0",
 ]
 
 [project.optional-dependencies]

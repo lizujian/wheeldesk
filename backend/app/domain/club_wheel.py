@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 from decimal import Decimal, ROUND_FLOOR
 
 from app.domain.indicators import SupportLevel
@@ -88,20 +88,15 @@ def evaluate_club_wheel_entries(
             one_contract_collateral is not None
             and one_contract_collateral > wheel_budget_available
         )
-        earnings_clear = (
-            market.next_earnings_date is None
-            or market.next_earnings_date > as_of + timedelta(days=45)
-        )
         checks = {
             "qqq_above_ma200": qqq_above_ma200,
-            "stock_above_ma200": market.close > market.ma200,
-            "rsi_below_40": market.rsi14 < Decimal("40"),
+            "stock_above_ma200": market.ma200 is not None and market.close > market.ma200,
+            "rsi_below_40": market.rsi14 is not None and market.rsi14 < Decimal("40"),
             "daily_drop": market.change_fraction is not None
             and market.change_fraction <= DAILY_DROP_TRIGGER,
             "confirmed_support": preferred_support is not None,
-            "earnings_clear": earnings_clear,
             "live_quote": market.live_quote,
-            "market_cap": market.market_cap_live,
+            "club_member": market.club_member,
             "history": market.completed_sessions >= 252,
             "weekly_limit": weekly_limit,
             "no_active_cycle": not active_cycle,
@@ -147,7 +142,7 @@ def evaluate_club_wheel_entries(
                 active_cycle=active_cycle,
                 next_earnings_date=market.next_earnings_date,
                 earnings_available=market.earnings_available,
-                earnings_confirmation_required=True,
+                earnings_confirmation_required=False,
                 high_risk_put_ids=high_risk_put_ids,
             )
         )

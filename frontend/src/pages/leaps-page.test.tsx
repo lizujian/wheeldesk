@@ -89,6 +89,78 @@ function showHoldingsTab() {
 }
 
 describe('LEAPS combined console', () => {
+  it('shows per-symbol cost and signed net cash flow after IV, including zero and absent holdings', () => {
+    const value: MarketSnapshot = { ...market, leaps_watchlist: [
+      ['QQQ', 5000, 300], ['DRAM', 1068, -36], ['AAPL', 0, 0], ['SOXX', null, null],
+    ].map(([symbol, committed, cashFlow]) => ({
+      symbol: String(symbol), name: String(symbol), price: 50, change_fraction: 0, ma200: 45, rsi14: 40,
+      source: 'ibkr', error: null, iv: null, iv_error: null,
+      holding_occupancy: committed == null ? null : { committed: Number(committed), net_cash_flow: Number(cashFlow) },
+    })) }
+    render(<MemoryRouter><LeapsPage market={value} positions={[]} portfolio={portfolio} /></MemoryRouter>)
+    const list = screen.getByRole('region', { name: 'LEAPS 股票列表' })
+    expect(within(list).getAllByRole('columnheader').map((header) => header.textContent))
+      .toEqual(['股票', '当前价', '日涨跌', 'RSI14', 'IV', '当前持仓占用', '说明'])
+    for (const [symbol, expected] of [['QQQ', '$5,000.00（+$300.00）'], ['DRAM', '$1,068.00（-$36.00）'], ['AAPL', '$0.00（$0.00）'], ['SOXX', '-']]) {
+      const row = within(list).getByRole('row', { name: new RegExp(`^${symbol}`) })
+      expect(within(row).getAllByRole('cell')[5].textContent).toBe(expected)
+    }
+    expect(within(list).getByText('（+$300.00）')).toHaveClass('positive')
+    expect(within(list).getByText('（-$36.00）')).toHaveClass('negative')
+  })
+
+  it.each(['etf', 'club'] as const)('manages DRAM Long and Short together even with cached category %s', (category) => {
+    const long = position({ id: 9, symbol: 'DRAM', leaps_category: category, entry_price: 10.68, current_price: 10.65, quote_bid: 10.65, strike: 50, expiration: '2027-06-17', current_value: 1065 })
+    const call: OtherHolding = {
+      id: 30, category: 'leaps_call_wheel', symbol: 'DRAM', asset_type: 'option', direction: 'short', option_type: 'call',
+      quantity: 1, multiplier: 100, entry_price: 1.52, current_price: 1.88, current_value: -188, absolute_value: 188,
+      unrealized_profit: -36, opened_on: '2026-10-13', expiration: '2026-10-30', strike: 55, status: 'open', closed_on: null,
+      exit_price: null, realized_profit: null, quote_source: 'ibkr', quote_as_of: '2026-10-14', quote_status: 'updated', last_error: null, linked_position_id: 9,
+    }
+    render(<MemoryRouter><LeapsPage market={market} positions={[long]} portfolio={portfolio} leapsCalls={[call]} /></MemoryRouter>)
+    showHoldingsTab()
+    const register = screen.getByRole('region', { name: 'DRAM / SOXX 当前持仓' })
+    expect(within(register).getByRole('article', { name: 'LEAPS 持仓 9' })).toHaveTextContent('$10.68')
+    expect(within(register).getByRole('article', { name: 'DRAM PMCC Short Call 30' })).toHaveTextContent('关联 Long Call #9')
+    expect(within(register).getByText('-$36.00')).toBeInTheDocument()
+    expect(within(screen.getByRole('region', { name: '万亿俱乐部当前持仓' })).queryByText('DRAM')).not.toBeInTheDocument()
+    expect(within(screen.getByRole('region', { name: 'QQQ / QLD 当前持仓' })).queryByText('DRAM')).not.toBeInTheDocument()
+  })
+
+  it('explains unmet indicators using actual decisions even when displayed intraday price crosses MA200', () => {
+    const value = { ...market, leaps_club: { decisions: [clubDecision({ checks: { stock_above_ma200: false, rsi_below_45: true, daily_drop: false, live_quote: false } })], unavailable: [], exclusions: [] } }
+    render(<MemoryRouter><LeapsPage market={value} positions={[]} portfolio={portfolio} /></MemoryRouter>)
+    const row = screen.getByRole('row', { name: /AAPL.*Apple/ })
+    expect(row).not.toHaveTextContent('已满足：')
+    expect(row).toHaveTextContent('未满足：标的收盘高于 MA200、当日跌幅 > 5%、有效实时行情')
+    expect(row).not.toHaveTextContent('当前满足入场条件')
+  })
+
+  it('shows VIX snapshot, intraday 52-week high and empirical percentile with sample count', () => {
+    const value: MarketSnapshot = { ...market, vix_context: {
+      price: 15.19, price_kind: 'snapshot', source: 'ibkr', quality: 'delayed', market_as_of: null, fetched_at: '2026-10-14T10:00:00Z',
+      close_as_of: '2026-10-13', high_52w: 35.3, high_52w_as_of: '2026-03-09', percentile_fraction: .125, sample_size: 252,
+      window_start: '2025-10-15', window_end: '2026-10-14', error: null, history_error: null,
+    } }
+    render(<MemoryRouter><LeapsPage market={value} positions={[]} portfolio={portfolio} /></MemoryRouter>)
+    const band = screen.getByRole('region', { name: 'VIX 市场环境' })
+    for (const text of ['15.19', '35.30', '12.5%']) expect(within(band).getByText(text)).toBeInTheDocument()
+    expect(band).toHaveTextContent('刷新时行情 · 延迟')
+    expect(band).toHaveTextContent('252 日样本')
+    expect(band).toHaveTextContent('2025-10-15 至 2026-10-14')
+  })
+
+  it('explains ETF signals with the club thresholds and does not duplicate ETF list rows', () => {
+    const value: MarketSnapshot = { ...market, leaps_etfs: { decisions: [clubDecision({ symbol: 'SOXX', checks: {
+      stock_above_ma200: true, rsi_below_45: true, daily_drop: false, weekly_limit: false, live_quote: false,
+    } })], unavailable: [] } }
+    render(<MemoryRouter><LeapsPage market={value} positions={[]} portfolio={portfolio} /></MemoryRouter>)
+    const rows = screen.getAllByRole('row', { name: /SOXX/ })
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).not.toHaveTextContent('已满足：')
+    expect(rows[0]).toHaveTextContent('未满足：当日跌幅 > 5%、本周开仓限频、有效实时行情')
+    expect(rows[0]).not.toHaveTextContent('买入信号尚未配置')
+  })
   it('shows a QLD replacement Sell Call in the QQQ / QLD register', () => {
     const qldCall: OtherHolding = {
       id: 19, category: 'leaps_call_wheel', symbol: 'QLD', asset_type: 'option', direction: 'short', option_type: 'call',
@@ -182,7 +254,7 @@ describe('LEAPS combined console', () => {
     expect(screen.getByRole('region', { name: 'QQQ / QLD 当前持仓' })).toBeInTheDocument()
     expect(screen.getByRole('region', { name: '万亿俱乐部 LEAPS' })).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('tab', { name: /股票列表 \/ 信号/ }))
+    fireEvent.click(screen.getByRole('tab', { name: /股票列表/ }))
     expect(screen.getByRole('region', { name: 'LEAPS 股票列表' })).toBeInTheDocument()
     expect(screen.queryByRole('region', { name: 'QQQ / QLD 当前持仓' })).not.toBeInTheDocument()
   })
@@ -194,9 +266,16 @@ describe('LEAPS combined console', () => {
     const qqqRow = within(list).getByRole('row', { name: /QQQ.*Invesco QQQ/ })
     expect(within(qqqRow).getByText('$494.00')).toBeInTheDocument()
     expect(within(qqqRow).getByText('-1.20%')).toBeInTheDocument()
-    expect(within(qqqRow).getByText('$450.00')).toBeInTheDocument()
+    expect(within(qqqRow).getByText('（+9.78%）')).toBeInTheDocument()
+    expect(within(list).getByRole('columnheader', { name: /^当前价$/ })).toBeInTheDocument()
+    expect(within(list).queryByRole('columnheader', { name: /^MA200$/ })).not.toBeInTheDocument()
     expect(within(qqqRow).getByText('42.0')).toBeInTheDocument()
-    expect(within(qqqRow).getByText('已触发')).toBeInTheDocument()
+    expect(within(list).queryByRole('columnheader', { name: 'LEAPS 信号' })).not.toBeInTheDocument()
+    expect(within(list).getByRole('columnheader', { name: '说明' })).toBeInTheDocument()
+    expect(within(list).getByRole('columnheader', { name: /^IV$/ })).toBeInTheDocument()
+    expect(within(list).queryByRole('columnheader', { name: '前一日 IV' })).not.toBeInTheDocument()
+    expect(within(qqqRow).getByTitle('全部入场条件已满足')).toHaveTextContent('—')
+    expect(qqqRow).not.toHaveTextContent('已满足：')
 
     expect(screen.queryByText('五槽位容量')).not.toBeInTheDocument()
     expect(screen.queryByRole('article', { name: 'LEAPS 容量槽位 1' })).not.toBeInTheDocument()
@@ -350,7 +429,7 @@ describe('LEAPS combined console', () => {
     showHoldingsTab()
 
     const club = screen.getByRole('region', { name: '万亿俱乐部 LEAPS' })
-    expect(within(club).getByText('资格门槛')).toBeInTheDocument()
+    expect(within(club).getByText('成员维护')).toBeInTheDocument()
     expect(within(club).getByText('尚无万亿俱乐部 Long Call 持仓')).toBeInTheDocument()
     expect(within(club).queryByText('AAPL')).not.toBeInTheDocument()
   })
@@ -373,8 +452,67 @@ describe('LEAPS combined console', () => {
 
     const rows = within(screen.getByRole('region', { name: 'LEAPS 股票列表' })).getAllByRole('row')
     expect(rows[1]).toHaveTextContent('QQQ')
-    expect(rows[2]).toHaveTextContent('NVDA')
-    expect(rows[3]).toHaveTextContent('MSFT')
-    expect(rows[4]).toHaveTextContent('AAPL')
+    expect(rows[2]).toHaveTextContent('DRAM')
+    expect(rows[3]).toHaveTextContent('SOXX')
+    expect(rows[4]).toHaveTextContent('NVDA')
+    expect(rows[5]).toHaveTextContent('MSFT')
+    expect(rows[6]).toHaveTextContent('AAPL')
+  })
+})
+
+
+describe('underlying IV in the LEAPS stock list', () => {
+  it.each([['pre','盘前'], ['post','盘后'], ['overnight','夜盘']])('labels actual %s quotes and shows the trade time in New York', (session, label) => {
+    const value: MarketSnapshot = { ...market, leaps_watchlist: [{ symbol: 'QQQ', name: 'Invesco QQQ',
+      price: 494, change_fraction: -.012, ma200: 450, rsi14: 42, source: 'ibkr', error: null, iv: null, iv_error: null,
+      price_kind: 'snapshot', session, market_session: session, quality: 'delayed', market_as_of: '2026-10-14T12:00:00Z',
+    }] }
+    render(<MemoryRouter><LeapsPage market={value} positions={[]} portfolio={portfolio} /></MemoryRouter>)
+    const row = screen.getByRole('row', { name: /QQQ.*Invesco QQQ/ })
+    expect(row).toHaveTextContent(`${label} · 延迟 · 08:00`)
+    expect(screen.queryByRole('region', { name: 'PMCC 合约规则' })).not.toBeInTheDocument()
+  })
+
+  it('keeps old regular quotes distinct from unavailable overnight prices', () => {
+    const value: MarketSnapshot = { ...market, leaps_watchlist: [{ symbol: 'QQQ', name: 'Invesco QQQ',
+      price: 494, change_fraction: -.012, ma200: 450, rsi14: 42, source: 'ibkr', error: null, iv: null, iv_error: null,
+      price_kind: 'snapshot', session: 'regular', market_session: 'overnight', quality: 'closed', session_error: '夜盘暂无行情',
+    }] }
+    render(<MemoryRouter><LeapsPage market={value} positions={[]} portfolio={portfolio} /></MemoryRouter>)
+    const row = screen.getByRole('row', { name: /QQQ.*Invesco QQQ/ })
+    expect(row).toHaveTextContent('最近日盘成交 · 冻结')
+    expect(row).toHaveTextContent('夜盘报价暂缺')
+  })
+  it.each([
+    [.25, .25, '25.00%', '↑ +25.00%'],
+    [.18, -.1, '18.00%', '↓ -10.00%'],
+    [.2, 0, '20.00%', '0.00%'],
+  ])('shows latest IV date and retains the relative change without a previous IV column for %s', (latest, change, formattedIv, formattedChange) => {
+    const value: MarketSnapshot = { ...market, leaps_watchlist: [{
+      symbol: 'QQQ', name: 'Invesco QQQ', price: 494, change_fraction: -.012, ma200: 450, rsi14: 42, source: 'ibkr', error: null, iv_error: null,
+      iv: { symbol: 'QQQ', latest: { as_of: '2026-10-13', value: latest }, previous: { as_of: '2026-10-12', value: .2 }, change_fraction: change, source: 'ibkr', fetched_at: '2026-10-14T10:00:00Z' },
+    }] }
+    render(<MemoryRouter><LeapsPage market={value} positions={[]} portfolio={portfolio} /></MemoryRouter>)
+    const row = screen.getByRole('row', { name: /QQQ.*Invesco QQQ/ })
+    expect(within(row).getAllByText(formattedIv).length).toBeGreaterThan(0)
+    expect(within(row).getByText(formattedChange)).toBeInTheDocument()
+    expect(within(row).getByText('2026-10-13')).toBeInTheDocument()
+    expect(within(row).queryByText('2026-10-12')).not.toBeInTheDocument()
+    expect(within(row).queryByText('2026-10-14')).not.toBeInTheDocument()
+    expect(within(row).getByText(formattedChange)).toHaveClass(change > 0 ? 'positive' : change < 0 ? 'negative' : 'leaps-iv-change')
+  })
+
+  it('shows DRAM price, RSI and IV while marking an unavailable MA200', () => {
+    const value: MarketSnapshot = { ...market, leaps_watchlist: [{
+      symbol: 'DRAM', name: 'Roundhill Memory ETF', price: 55, change_fraction: .03, ma200: null, rsi14: 62, completed_sessions: 134, source: 'ibkr', error: null, iv_error: null,
+      iv: { symbol: 'DRAM', latest: { as_of: '2026-10-13', value: .538 }, previous: null, change_fraction: null, source: 'ibkr', fetched_at: '2026-10-14T10:00:00Z' },
+    }] }
+    render(<MemoryRouter><LeapsPage market={value} positions={[]} portfolio={portfolio} /></MemoryRouter>)
+    const row = screen.getByRole('row', { name: /DRAM.*Roundhill Memory ETF/ })
+    expect(within(row).getByText('$55.00')).toBeInTheDocument()
+    expect(within(row).getByText('62.0')).toBeInTheDocument()
+    expect(within(row).getByText('53.80%')).toBeInTheDocument()
+    expect(within(row).getByTitle('仅有 134 个完成交易日，MA200 需要 200 日')).toHaveTextContent('MA200 暂缺')
+    expect(within(row).getByText(/未满足：MA200 数据不足/)).toBeInTheDocument()
   })
 })

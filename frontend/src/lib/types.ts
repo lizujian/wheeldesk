@@ -81,8 +81,8 @@ export interface ClubEntryDecision {
   previous_close: number
   change_fraction: number | null
   close: number
-  ma200: number
-  rsi14: number
+  ma200: number | null
+  rsi14: number | null
   market_cap: number | null
   market_cap_as_of: string | null
   market_cap_currency: string | null
@@ -122,8 +122,98 @@ export interface ClubWheelDecision {
   high_risk_put_ids: number[]
 }
 
+export interface QuoteMetadata {
+  quote_vendor?: string | null
+  quote_quality?: string | null
+  quote_fetched_at?: string | null
+  quote_market_as_of?: string | null
+  last_error?: string | null
+}
+
+export interface MarketSettings {
+  provider: 'ibkr'
+  ibkr_host: string | null
+  ibkr_port: number | null
+  ibkr_client_id: number
+  effective_provider: 'ibkr'
+  configured: boolean
+  vix_provider: 'ibkr'
+  club_symbols: string[]
+  config_key: string
+}
+
+export interface IbkrConnectionStatus {
+  connected: boolean
+  client_readonly?: boolean
+  gateway_readonly?: string
+  positions_count?: number
+  server_version?: string
+  warnings?: Array<{ symbol: string; error: string }>
+  error?: string
+  quote_error?: string
+  qqq?: { price: number; source: string; quality: string; market_as_of: string | null; fetched_at: string }
+  vix?: { price: number; source: string; quality: string; market_as_of: string | null; fetched_at: string }
+}
+
+export interface ImpliedVolatilityComparison {
+  symbol: string
+  latest: { as_of: string; value: number }
+  previous: { as_of: string; value: number } | null
+  change_fraction: number | null
+  source: string
+  fetched_at: string
+}
+
+export interface LeapsWatchlistEntry {
+  symbol: string
+  name: string
+  price: number | null
+  change_fraction: number | null
+  ma200: number | null
+  rsi14: number | null
+  source: string | null
+  error: string | null
+  iv: ImpliedVolatilityComparison | null
+  iv_error: string | null
+  holding_occupancy?: { committed: number; net_cash_flow: number } | null
+  completed_sessions?: number | null
+  price_kind?: 'snapshot' | 'close'
+  session?: string | null
+  market_session?: string | null
+  quality?: string | null
+  market_as_of?: string | null
+  fetched_at?: string | null
+  exchange?: string | null
+  session_error?: string | null
+}
+
+export type MarketRefreshScope = 'stocks' | 'full'
+
 export interface MarketSnapshot {
-  source: 'sample' | 'yahoo' | 'mixed'
+  refresh_scope?: MarketRefreshScope
+  vix_context?: {
+    price: number | null
+    price_kind: 'snapshot' | 'close' | null
+    source: string | null
+    quality: string | null
+    market_as_of: string | null
+    fetched_at: string | null
+    close_as_of: string | null
+    high_52w: number | null
+    high_52w_as_of: string | null
+    percentile_fraction: number | null
+    sample_size: number
+    window_start: string
+    window_end: string
+    error: string | null
+    history_error: string | null
+  }
+  source: 'sample' | 'yahoo' | 'ibkr' | 'mixed'
+  primary_provider?: 'yahoo' | 'ibkr'
+  vix_provider?: 'yahoo' | 'ibkr' | 'sample'
+  config_key?: string
+  errors?: Array<{ symbol: string; error: string }>
+  broker_positions?: { broker_position_count: number; matched_count: number; unsupported_count: number; ledger_updated: false; differences: Array<{ symbol: string; asset_type: string; ledger_quantity: number; broker_quantity: number }> } | null
   as_of: string
   stale: boolean
   market: {
@@ -132,7 +222,7 @@ export interface MarketSnapshot {
     brk_b: { price: number }
     voo?: { price: number }
     schd?: { price: number }
-    vix: { price: number }
+    vix: { price: number | null; source?: string; as_of?: string | null; error?: string | null }
   }
   wheel: {
     eligible: boolean
@@ -168,6 +258,10 @@ export interface MarketSnapshot {
     unavailable: Array<{ symbol: string; name: string; error: string }>
     exclusions: string[]
   }
+  leaps_etfs?: {
+    decisions: ClubEntryDecision[]
+    unavailable: Array<{ symbol: string; name: string; error: string }>
+  }
   leaps_session?: {
     available: boolean
     price: number | null
@@ -175,10 +269,14 @@ export interface MarketSnapshot {
     change_fraction: number | null
     quoted_at: string | null
     market_date: string
-    session: 'pre' | 'regular' | 'post' | 'sample' | 'unavailable'
+    session: 'pre' | 'regular' | 'post' | 'closed' | 'overnight' | 'unknown' | 'sample' | 'unavailable'
     source: string | null
+    quality?: string
+    fetched_at?: string | null
+    market_as_of?: string | null
   }
   equities?: Record<string, EquityQuote>
+  leaps_watchlist?: LeapsWatchlistEntry[]
   core?: CoreStrategyDecision
 }
 
@@ -201,7 +299,7 @@ export interface CoreAssetDecision {
   below_ma200_two_days: boolean
   return_20d: number
   return_126d: number
-  code: 'monthly' | 'pullback' | 'correction' | 'deep' | 'cooldown' | 'waiting' | 'at_target' | 'pending_puts' | 'put_preferred'
+  code: 'monthly' | 'pullback' | 'correction' | 'deep' | 'cooldown' | 'waiting' | 'at_target' | 'pending_puts' | 'put_preferred' | 'vix_unavailable'
   actionable: boolean
   fraction: number
   strategy_amount: number
@@ -269,7 +367,7 @@ export interface CoreStrategyDecision {
   cash_available: number
 }
 
-export interface OtherHolding {
+export interface OtherHolding extends QuoteMetadata {
   id: number
   category: 'cash_equivalent' | 'other' | 'leaps_call_wheel' | 'pmcc'
   symbol: string
@@ -414,7 +512,7 @@ export interface WheelBudgetStatus {
   usage_fraction: number | null
 }
 
-export interface WheelCallLot {
+export interface WheelCallLot extends QuoteMetadata {
   id: number
   share_lot_id: number
   trade_date: string
@@ -453,7 +551,7 @@ export interface WheelShareLot {
   calls: WheelCallLot[]
 }
 
-export interface WheelPutLot {
+export interface WheelPutLot extends QuoteMetadata {
   id: number
   round_id: number
   capital_bucket?: 'wheel' | 'core'
@@ -671,7 +769,7 @@ export interface IbkrImportHistoryRow {
   created_at: string
 }
 
-export interface Position {
+export interface Position extends QuoteMetadata {
   id: number
   rolled_from_position_id?: number | null
   bucket: Bucket
@@ -688,7 +786,7 @@ export interface Position {
   strike: number | null
   delta: number | null
   tranche: number | null
-  leaps_category?: 'qqq' | 'club' | null
+  leaps_category?: 'qqq' | 'club' | 'etf' | null
   underlying_entry_price?: number | null
   status: 'open' | 'closed'
   closed_on?: string | null

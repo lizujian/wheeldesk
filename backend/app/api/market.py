@@ -2,6 +2,7 @@ from dataclasses import asdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -27,6 +28,7 @@ from app.domain.indicators import (
     wilder_rsi,
 )
 from app.domain.leaps import (
+    ADDITIONAL_LEAPS_ETFS,
     LeapsMarketState,
     evaluate_leaps_tranches,
     select_fifo_position,
@@ -36,22 +38,23 @@ from app.domain.trillion_club import (
     TRILLION_CLUB_EXCLUSIONS,
     ClubMarketState,
     ClubPositionState,
-    TRILLION_USD,
     evaluate_club_entries,
-    is_club_symbol,
 )
 from app.domain.models import Bucket
 from app.domain.wheel import evaluate_risk, evaluate_sell_put
 from app.market.base import (
-    FallbackMarketDataProvider,
     MarketDataProvider,
     MarketDataError,
     OptionDataProvider,
     completed_daily_bars,
     is_stale,
+    option_quote_usable,
+    quote_metadata,
+    session_quote_live,
 )
-from app.market.sample import SampleMarketDataProvider
-from app.market.yahoo import YahooMarketDataProvider
+from app.market.factory import market_provider
+from app.market.settings import read_settings
+from app.market.operations import market_operation
 from app.services.portfolio_store import PortfolioStore
 from app.services.signals import SignalService
 from app.services.core_rotation import CoreRotationService
@@ -59,6 +62,8 @@ from app.services.wheel_cycles import WheelCycleService
 from app.services.wheel_portfolio import WheelPortfolioService
 from app.services.wheel_quotes import WheelQuoteService
 from app.services.pmcc import pmcc_snapshot
+from app.services.leaps_watchlist import PINNED_LEAPS_SYMBOLS, load_leaps_watchlist
+from app.services.vix_context import load_vix_context
 from app.db_models import (
     CoreTradeRecord,
     LedgerEvent,
@@ -73,27 +78,102 @@ router = APIRouter(prefix="/api/market", tags=["market"])
 ZERO = Decimal("0")
 
 
-def get_market_provider() -> MarketDataProvider:
-    return FallbackMarketDataProvider(YahooMarketDataProvider(), SampleMarketDataProvider())
+def get_market_provider(session: Session = Depends(get_session)) -> MarketDataProvider:
+    try:
+        return market_provider(read_settings(session), session.get_bind())
+    except MarketDataError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
 
 
-def get_option_provider() -> OptionDataProvider:
-    return YahooMarketDataProvider()
+def get_option_provider(provider: MarketDataProvider = Depends(get_market_provider)) -> OptionDataProvider:
+    return provider
+
+
+def get_vix_provider(provider: MarketDataProvider = Depends(get_market_provider)) -> MarketDataProvider:
+    return provider
 
 
 @router.post("/refresh")
+@market_operation
 def refresh(
     session: Session = Depends(get_session),
     provider: MarketDataProvider = Depends(get_market_provider),
     option_provider: OptionDataProvider = Depends(get_option_provider),
+    vix_provider: MarketDataProvider = Depends(get_vix_provider),
+    scope: Literal["stocks", "full"] = "full",
 ):
+    refresh_options = scope == "full"
+    settings = read_settings(session)
+    from app.market.ibkr import IbkrMarketDataProvider
+    club_symbols = settings.club_symbols
+    if isinstance(provider, IbkrMarketDataProvider):
+        provider = market_provider(settings, session.get_bind())
+        option_provider = provider
+        vix_provider = provider
+    quote_errors = []
+    if hasattr(provider, "begin_refresh"):
+        provider.begin_refresh()
+    combined_prefetch = provider is option_provider and hasattr(provider, "prefetch_quotes")
+    symbols = {*PINNED_LEAPS_SYMBOLS, "TQQQ", "VIX", *CORE_SYMBOLS, *club_symbols}
+    symbols.update(session.scalars(select(UnmanagedPositionRecord.symbol).where(UnmanagedPositionRecord.status == "open", UnmanagedPositionRecord.asset_type == "equity")))
+    symbols.update(session.scalars(select(PositionRecord.symbol).where(PositionRecord.status == "open", PositionRecord.asset_type == "equity")))
+    contracts = []
+    if refresh_options:
+        from app.db_models import WheelCallLot
+        for model in (PositionRecord, UnmanagedPositionRecord):
+            for record in session.scalars(select(model).where(model.status == "open", model.asset_type == "option")):
+                if record.option_type and record.expiration and record.strike:
+                    contracts.append((record.symbol, record.option_type, record.expiration, record.strike))
+        for record in session.scalars(select(WheelPutLot).where(WheelPutLot.state == "open")):
+            contracts.append((record.symbol, "put", record.expiration, record.strike))
+        for record in session.scalars(select(WheelCallLot).where(WheelCallLot.state == "open")):
+            share = session.get(WheelShareLot, record.share_lot_id)
+            put = session.get(WheelPutLot, share.put_lot_id) if share else None
+            if put:
+                contracts.append((put.symbol, "call", record.expiration, record.strike))
+    if combined_prefetch:
+        from app.services.market_prefetch import prefetch_market_data
+        prefetch_market_data(
+            provider, symbols, contracts,
+            ("QQQ", "TQQQ", *CORE_SYMBOLS, *club_symbols, *ADDITIONAL_LEAPS_ETFS),
+            (*PINNED_LEAPS_SYMBOLS, *club_symbols) if refresh_options else (),
+        )
+    else:
+        try:
+            if hasattr(provider, "prefetch_snapshots"):
+                provider.prefetch_snapshots(symbols)
+        except MarketDataError:
+            pass  # per-symbol requests report failures, preserving good legs
+        if refresh_options and hasattr(option_provider, "prefetch_options"):
+            try:
+                option_provider.prefetch_options(contracts)
+            except MarketDataError:
+                pass
     try:
-        series = {
-            symbol: provider.daily_bars(symbol, 300)
-            for symbol in ("QQQ", "TQQQ", *CORE_SYMBOLS, "VIX")
-        }
+        symbols_for_history = list(dict.fromkeys(("QQQ", "TQQQ", *CORE_SYMBOLS)))
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            series = dict(zip(symbols_for_history, executor.map(lambda symbol: provider.daily_bars(symbol, 300), symbols_for_history)))
     except MarketDataError as error:
+        SignalService(session).retire_market_signals()
+        _refresh_equities(session, provider, {})
+        failed_date = datetime.now(ZoneInfo("America/New_York")).date()
+        if refresh_options:
+            _refresh_unmanaged_options(session, option_provider, failed_date)
+            _refresh_leaps_quotes(list(session.scalars(select(PositionRecord).where(PositionRecord.status == "open", PositionRecord.asset_type == "option"))), option_provider, failed_date)
+            WheelQuoteService(session, option_provider).refresh_open_lots({}, failed_date)
+        session.commit()
         raise HTTPException(status_code=503, detail=str(error)) from error
+
+    vix_error = None
+    vix = None
+    try:
+        vix_series = vix_provider.daily_bars("VIX", 5)
+        series["VIX"] = vix_series
+        if vix_series.source == "sample" or is_stale(vix_series.as_of, datetime.now(ZoneInfo("America/New_York")).date()):
+            raise MarketDataError("VIX 数据已过期")
+        vix = vix_series.bars[-1].close
+    except (MarketDataError, OSError) as error:
+        vix_error = str(error)
 
     qqq = series["QQQ"]
     tqqq = series["TQQQ"]
@@ -107,8 +187,16 @@ def refresh(
     qqq_closes = [bar.close for bar in qqq_bars]
     qqq_as_of = qqq_bars[-1].date
     market_date = session_quote.market_date if session_quote else qqq_as_of
-    live_session_quote = session_quote is not None and session_quote.source != "sample"
-    tqqq_spot = tqqq.bars[-1].close
+    live_session_quote = session_quote_live(session_quote)
+    spots = {}
+    for symbol in ("TQQQ", *CORE_SYMBOLS):
+        try:
+            quote = provider.session_quote(symbol)
+            if quote.source != "sample" and quote.quality != "stale":
+                spots[symbol] = quote.price
+        except (AttributeError, MarketDataError, OSError):
+            pass
+    tqqq_spot = spots.get("TQQQ", tqqq.bars[-1].close)
     qqq_ma20 = simple_moving_average(qqq_closes, 20)
     qqq_ma200 = simple_moving_average(qqq_closes, 200)
     qqq_rsi = wilder_rsi(qqq_closes)
@@ -144,7 +232,8 @@ def refresh(
         session_quote_live=live_session_quote,
     )
     equity_quotes = _refresh_equities(session, provider, series)
-    _refresh_unmanaged_options(session, option_provider, qqq_as_of)
+    if refresh_options:
+        _refresh_unmanaged_options(session, option_provider, qqq_as_of)
     portfolio = PortfolioStore(session).summary()
     total_equity = Decimal(str(portfolio.get("total_equity", ZERO)))
     pmcc_total_target = total_equity * Decimal("0.25")
@@ -165,10 +254,11 @@ def refresh(
             )
         )
     )
-    _refresh_leaps_quotes(leaps_positions, option_provider, qqq_as_of)
+    if refresh_options:
+        _refresh_leaps_quotes(leaps_positions, option_provider, qqq_as_of)
     session.commit()
-    qqq_positions = [position for position in leaps_positions if not is_club_symbol(position.symbol)]
-    club_positions = [position for position in leaps_positions if is_club_symbol(position.symbol)]
+    qqq_positions = [position for position in leaps_positions if position.symbol in {"QQQ", "QLD"}]
+    club_positions = [position for position in leaps_positions if position.symbol not in {"QQQ", "QLD"}]
     used_tranches = {
         position.tranche for position in qqq_positions if position.tranche is not None
     }
@@ -222,12 +312,14 @@ def refresh(
         "required": len(used_tranches) >= 5 and base_entry_ready,
         "candidate": fifo_candidate if len(used_tranches) >= 5 and base_entry_ready else None,
     }
-    club_market_states, club_unavailable = _load_club_markets(provider, market_date)
+    club_market_states, club_unavailable = _load_club_markets(provider, market_date,
+        [symbol for symbol in club_symbols if symbol not in ADDITIONAL_LEAPS_ETFS])
+    etf_market_states, etf_unavailable = _load_club_markets(provider, market_date, list(ADDITIONAL_LEAPS_ETFS))
     wheel_spots = {
         "TQQQ": tqqq_spot,
-        "BRK.B": series["BRK.B"].bars[-1].close,
-        "VOO": series["VOO"].bars[-1].close,
-        "SCHD": series["SCHD"].bars[-1].close,
+        "BRK.B": spots.get("BRK.B", series["BRK.B"].bars[-1].close),
+        "VOO": spots.get("VOO", series["VOO"].bars[-1].close),
+        "SCHD": spots.get("SCHD", series["SCHD"].bars[-1].close),
     }
     wheel_spots.update(
         {
@@ -235,12 +327,13 @@ def refresh(
             for state in club_market_states
         }
     )
-    WheelQuoteService(session, option_provider).refresh_open_lots(wheel_spots, market_date)
+    if refresh_options:
+        WheelQuoteService(session, option_provider).refresh_open_lots(wheel_spots, market_date)
     club_entry_dates = list(
         session.scalars(
             select(PositionRecord.opened_on).where(
                 PositionRecord.bucket == Bucket.LEAPS.value,
-                PositionRecord.symbol.in_(list(TRILLION_CLUB_CANDIDATES)),
+                PositionRecord.symbol.not_in(["QQQ", "QLD"]),
             )
         )
     )
@@ -267,8 +360,8 @@ def refresh(
         ),
         ZERO,
     )
-    club_decisions = evaluate_club_entries(
-        club_market_states,
+    individual_decisions = evaluate_club_entries(
+        [*club_market_states, *etf_market_states],
         club_position_states,
         option_committed,
         pmcc_total_target,
@@ -285,12 +378,14 @@ def refresh(
                 ),
                 ZERO,
             )
-            for symbol in TRILLION_CLUB_CANDIDATES
+            for symbol in {*club_symbols, *ADDITIONAL_LEAPS_ETFS}
         },
         symbol_cap=pmcc_individual_cap,
         individual_current=individual_committed,
         individual_target=pmcc_individual_target,
     )
+    club_decisions = [row for row in individual_decisions if row.symbol not in ADDITIONAL_LEAPS_ETFS]
+    etf_decisions = [row for row in individual_decisions if row.symbol in ADDITIONAL_LEAPS_ETFS]
     club_wheel_puts = list(
         session.scalars(
             select(WheelPutLot)
@@ -346,6 +441,11 @@ def refresh(
             if position.symbol == "QLD"
         },
     }
+    for symbol in ADDITIONAL_LEAPS_ETFS:
+        try:
+            underlying_prices[symbol] = provider.session_quote(symbol).price
+        except (AttributeError, MarketDataError, OSError):
+            pass
     pmcc = pmcc_snapshot(
         session,
         as_of=market_date,
@@ -388,7 +488,7 @@ def refresh(
         "individual": {
             "eligible_symbols": [
                 decision.symbol
-                for decision in club_decisions
+                for decision in individual_decisions
                 if decision.technical_eligible
                 and decision.symbol in individual_available_set
             ],
@@ -474,15 +574,16 @@ def refresh(
     core_assets = []
     for symbol in CORE_SYMBOLS:
         symbol_series = series[symbol]
-        closes = [bar.close for bar in symbol_series.bars]
-        symbol_price = closes[-1]
+        bars = completed_daily_bars(symbol_series, session_quote) if session_quote else symbol_series.bars
+        closes = [bar.close for bar in bars]
+        symbol_price = spots.get(symbol, closes[-1])
         latest_symbol_event = next(
             (event for event in core_events if event.details.get("symbol") == symbol),
             None,
         )
         ma200 = simple_moving_average(closes, 200)
         previous_ma200 = simple_moving_average(closes[:-1], 200)
-        core_supports = find_support_levels(symbol_series.bars, symbol_price)
+        core_supports = find_support_levels(bars, symbol_price)
         core_assets.append(
             CoreAssetInputs(
                 symbol=symbol,
@@ -521,7 +622,7 @@ def refresh(
         total_target=core_target,
         total_equity=Decimal(str(portfolio.get("total_equity", 0))),
         available_funding=core_available + cash_available,
-        vix=series["VIX"].bars[-1].close,
+        vix=vix,
         ratio_z=ratio_z,
         route_confirmation_days=consecutive_extreme(ratio_zscores, Decimal("1")),
         rotation_confirmation_days=0,
@@ -550,9 +651,11 @@ def refresh(
     stale = is_stale(qqq_as_of, date.today())
     signal_service = SignalService(session)
     signal_service.retire_wheel_signals()
+    if vix is None:
+        signal_service.retire_market_signals(prefixes=("vix_high", "core_buy_"))
     if risk.severity == "critical":
         signal_service.emit("ma200_break", "跌破牛熊分界线", risk.message, "critical", market_date, stale=stale)
-    if series["VIX"].bars[-1].close >= Decimal("30"):
+    if vix is not None and vix >= Decimal("30"):
         signal_service.emit(
             "vix_high", "VIX 达到 30", "评估是否动用现金储备。", "warning", market_date, stale=stale
         )
@@ -561,7 +664,7 @@ def refresh(
         core_decision.recommendation,
         core_market_date,
         put=core_decision.sell_put,
-        stale=any(
+        stale=vix is None or any(
             series[symbol].source == "sample" or is_stale(series[symbol].as_of, date.today())
             for symbol in CORE_SYMBOLS
         ),
@@ -585,18 +688,53 @@ def refresh(
         signal_service.emit(
             f"trillion_club_{strongest.symbol.lower().replace('.', '_').replace('-', '_')}",
             f"{strongest.symbol} 万亿俱乐部 LEAPS 机会",
-            "个股趋势、RSI、市值与单日跌幅条件同时满足；成交仍由用户确认。",
+            "观察列表内个股趋势、RSI 与单日跌幅条件同时满足；成交仍由用户确认。",
             "opportunity",
             market_date,
             stale=stale,
         )
+    for decision in etf_decisions:
+        if decision.technical_eligible:
+            signal_service.emit(f"leaps_etf_{decision.symbol.lower()}", f"{decision.symbol} ETF LEAPS 机会",
+                "趋势、RSI 与单日跌幅条件满足万亿俱乐部同一套 LEAPS 规则；成交仍由用户确认。",
+                "opportunity", market_date, stale=stale)
+    leaps_watchlist = load_leaps_watchlist(provider, club_symbols, series, refresh_iv=refresh_options)
+    if refresh_options:
+        occupancy_by_symbol = {}
+        for state in pmcc_states:
+            if state["long_position_id"] is None:
+                continue
+            occupancy = occupancy_by_symbol.setdefault(state["symbol"], {"committed": ZERO, "net_cash_flow": ZERO})
+            occupancy["committed"] += state["long_debit"]
+            occupancy["net_cash_flow"] += state["net_cash_flow"]
+        for row in leaps_watchlist:
+            row["holding_occupancy"] = occupancy_by_symbol.get(row["symbol"])
     sources = {value.source for value in series.values()}
     if session_quote is not None:
         sources.add(session_quote.source)
+    if hasattr(provider, "warnings"):
+        quote_errors.extend(provider.warnings())
+    reconciliation = None
+    if isinstance(provider, IbkrMarketDataProvider):
+        from app.services.broker_reconciliation import reconcile_positions
+        try:
+            reconciliation = reconcile_positions(session, provider.connection)
+            if reconciliation["differences"]:
+                quote_errors.append({"symbol": "持仓核对", "error": f"盈透当前持仓与本地账本有 {len(reconciliation['differences'])} 项数量差异，请导入最新活动报表更新交易记录。"})
+        except MarketDataError as error:
+            quote_errors.append({"symbol": "持仓核对", "error": str(error)})
     return {
+        "refresh_scope": scope,
         "source": sources.pop() if len(sources) == 1 else "mixed",
         "as_of": market_date,
         "stale": stale,
+        "primary_provider": settings.effective_provider,
+        "config_key": settings.config_key,
+        "vix_provider": series["VIX"].source if "VIX" in series else settings.effective_provider,
+        "broker_positions": reconciliation,
+        "leaps_watchlist": leaps_watchlist,
+        "vix_context": load_vix_context(vix_provider),
+        "errors": quote_errors + ([{"symbol": "VIX", "error": vix_error}] if vix_error else []),
         "market": {
             "qqq": {
                 "price": qqq_closes[-1],
@@ -610,7 +748,7 @@ def refresh(
             "brk_b": {"price": series["BRK.B"].bars[-1].close},
             "voo": {"price": series["VOO"].bars[-1].close},
             "schd": {"price": series["SCHD"].bars[-1].close},
-            "vix": {"price": series["VIX"].bars[-1].close},
+            "vix": {"price": vix, "source": series["VIX"].source if "VIX" in series else settings.effective_provider, "as_of": series["VIX"].as_of if "VIX" in series else None, "error": vix_error},
         },
         "wheel": {
             "eligible": sell_put.eligible,
@@ -643,6 +781,7 @@ def refresh(
             "unavailable": club_unavailable,
             "exclusions": sorted(TRILLION_CLUB_EXCLUSIONS),
         },
+        "leaps_etfs": {"decisions": etf_decisions, "unavailable": etf_unavailable},
         "leaps_session": {
             "available": live_session_quote,
             "price": session_quote.price if session_quote else None,
@@ -652,6 +791,9 @@ def refresh(
             "market_date": market_date,
             "session": session_quote.session if session_quote else "unavailable",
             "source": session_quote.source if session_quote else None,
+            "quality": session_quote.quality if session_quote else "unavailable",
+            "fetched_at": session_quote.fetched_at if session_quote else None,
+            "market_as_of": session_quote.market_as_of if session_quote else None,
         },
         "equities": equity_quotes,
         "core": core_payload,
@@ -661,13 +803,14 @@ def refresh(
 def _load_club_markets(
     provider: MarketDataProvider,
     market_date: date,
+    symbols: list[str],
 ) -> tuple[list[ClubMarketState], list[dict]]:
     states: list[ClubMarketState] = []
     unavailable: list[dict] = []
     with ThreadPoolExecutor(max_workers=6) as executor:
         futures = {
             executor.submit(_load_club_market, provider, symbol, market_date): symbol
-            for symbol in TRILLION_CLUB_CANDIDATES
+            for symbol in symbols
         }
         for future in as_completed(futures):
             symbol = futures[future]
@@ -677,7 +820,7 @@ def _load_club_markets(
                 unavailable.append(
                     {
                         "symbol": symbol,
-                        "name": TRILLION_CLUB_CANDIDATES[symbol],
+                        "name": TRILLION_CLUB_CANDIDATES.get(symbol, symbol),
                         "error": str(error),
                     }
                 )
@@ -691,48 +834,35 @@ def _load_club_market(
     symbol: str,
     market_date: date,
 ) -> ClubMarketState:
-    market_cap = provider.market_cap(symbol)
-    if market_cap.source == "sample":
-        raise MarketDataError(f"{symbol} 公开市值不可用")
-    if market_cap.currency != "USD" or market_cap.value < TRILLION_USD:
-        raise MarketDataError(f"{symbol} 当前公开美元市值未达 $1T")
-    series = provider.daily_bars(symbol, 300)
+    is_etf = symbol in ADDITIONAL_LEAPS_ETFS
+    loader = getattr(provider, "watchlist_bars", provider.daily_bars) if is_etf else provider.daily_bars
+    series = loader(symbol, 300)
     quote = provider.session_quote(symbol)
     bars = completed_daily_bars(series, quote)
-    if len(bars) < 200:
+    if len(bars) < 2 or (len(bars) < 200 and not is_etf):
         raise MarketDataError(f"{symbol} 完成日线不足 200 条")
     closes = [bar.close for bar in bars]
-    market_cap_fresh = abs((market_date - market_cap.as_of).days) <= 200
-    try:
-        earnings = provider.earnings_date(symbol)
-        next_earnings_date = (
-            earnings.event_date if earnings.event_date >= market_date else None
-        )
-        earnings_available = earnings.source != "sample" and next_earnings_date is not None
-    except (AttributeError, MarketDataError, OSError, KeyError, ValueError):
-        next_earnings_date = None
-        earnings_available = False
     return ClubMarketState(
         symbol=symbol,
         close=closes[-1],
         previous_close=closes[-2],
-        ma200=simple_moving_average(closes, 200),
-        rsi14=wilder_rsi(closes),
+        ma200=simple_moving_average(closes, 200) if len(closes) >= 200 else None,
+        rsi14=wilder_rsi(closes) if len(closes) >= 15 else None,
         current_price=quote.price,
         change_fraction=quote.change_fraction,
-        live_quote=series.source != "sample" and quote.source != "sample",
-        market_cap=market_cap.value,
-        market_cap_as_of=market_cap.as_of,
-        market_cap_currency=market_cap.currency,
-        market_cap_live=market_cap.source != "sample" and market_cap_fresh,
+        live_quote=series.source != "sample" and session_quote_live(quote),
+        market_cap=None,
+        market_cap_as_of=None,
+        market_cap_currency=None,
+        market_cap_live=False,
+        club_member=True,
         completed_sessions=len(bars),
         two_closes_below_ma200=(
-            closes[-1] < simple_moving_average(closes, 200)
+            len(closes) >= 201
+            and closes[-1] < simple_moving_average(closes, 200)
             and closes[-2] < simple_moving_average(closes[:-1], 200)
         ),
         supports=tuple(find_support_levels(bars, quote.price)[:4]),
-        next_earnings_date=next_earnings_date,
-        earnings_available=earnings_available,
     )
 
 
@@ -762,25 +892,45 @@ def _refresh_equities(
     results: dict[str, dict] = {}
     for symbol in sorted(symbols):
         try:
-            value = fixed_series.get(symbol) or provider.daily_bars(symbol, 5)
-            if value.source == "sample":
+            try:
+                quote = provider.session_quote(symbol)
+                price, source = quote.price, quote.source
+                timestamp = quote.market_as_of or quote.fetched_at or quote.quoted_at
+                day = timestamp.astimezone(ZoneInfo("America/New_York")).date() if timestamp.tzinfo else timestamp.date()
+                metadata = quote_metadata(quote)
+                if quote.quality == "stale":
+                    raise MarketDataError("最新股票报价已过期")
+            except AttributeError:
+                # Compatibility for providers that supply only daily history.
+                value = fixed_series.get(symbol) or provider.daily_bars(symbol, 5)
+                price, source, day = value.bars[-1].close, value.source, value.as_of
+                timestamp = datetime.combine(day, datetime.min.time())
+                metadata = {}
+            if source == "sample":
                 raise MarketDataError("公开行情不可用，未使用模拟价格估值")
-            price = value.bars[-1].close
+            if price <= ZERO:
+                raise MarketDataError("股票价格无效")
             for record in other_records:
                 if record.symbol == symbol:
                     record.current_price = price
-                    record.quote_source = value.source
-                    record.quote_as_of = value.as_of
+                    record.quote_source = source
+                    record.quote_as_of = day
                     record.last_error = None
+                    for key, item in metadata.items():
+                        setattr(record, key, item)
             for position in equity_positions:
                 if position.symbol == symbol:
                     position.current_price = price
-                    position.quote_source = value.source
-                    position.quote_as_of = datetime.combine(value.as_of, datetime.min.time())
+                    position.quote_source = source
+                    position.quote_as_of = timestamp
+                    position.last_error = None
+                    for key, item in metadata.items():
+                        setattr(position, key, item)
             results[symbol] = {
                 "price": price,
-                "source": value.source,
-                "as_of": value.as_of,
+                "source": source,
+                "as_of": day,
+                **metadata,
                 "status": "updated",
                 "error": None,
             }
@@ -793,8 +943,10 @@ def _refresh_equities(
                 None,
             )
             matching = matching_record or matching_position
-            if matching_record is not None:
-                matching_record.last_error = str(error)
+            for record in [*other_records, *equity_positions]:
+                if record.symbol == symbol:
+                    record.last_error = str(error)
+                    record.quote_quality = "stale"
             results[symbol] = {
                 "price": matching.current_price if matching is not None else None,
                 "source": matching.quote_source if matching is not None else None,
@@ -829,16 +981,17 @@ def _refresh_unmanaged_options(
                 record.expiration,
                 record.strike,
             )
-            if quote.bid < 0 or quote.ask < quote.bid:
+            if not option_quote_usable(quote, as_of):
                 raise MarketDataError("其他期权报价不可用")
-            if abs((as_of - quote.quoted_at.date()).days) > 5:
-                raise MarketDataError("其他期权报价已过期")
             record.current_price = quote.bid if record.direction == "long" else quote.ask
             record.quote_source = quote.source
-            record.quote_as_of = quote.quoted_at.date()
+            record.quote_as_of = (quote.fetched_at or quote.quoted_at).date()
+            for key, item in quote_metadata(quote).items():
+                setattr(record, key, item)
             record.last_error = None
         except (MarketDataError, OSError) as error:
             record.last_error = str(error)
+            record.quote_quality = "stale"
     session.commit()
 
 
@@ -854,17 +1007,19 @@ def _refresh_leaps_quotes(
             quote = provider.option_quote(
                 position.symbol, "call", position.expiration, position.strike
             )
-            if quote.bid <= 0 or quote.ask < quote.bid:
+            if not option_quote_usable(quote, as_of):
                 raise MarketDataError("LEAPS 期权报价不可用")
-            if abs((as_of - quote.quoted_at.date()).days) > 5:
-                raise MarketDataError("LEAPS 期权报价已过期")
             position.quote_source = quote.source
             position.quote_bid = quote.bid
             position.quote_ask = quote.ask
             position.quote_last = quote.last
             position.quote_iv = quote.implied_volatility
-            position.quote_as_of = quote.quoted_at
+            position.quote_as_of = quote.fetched_at or quote.quoted_at
+            position.last_error = None
+            for key, item in quote_metadata(quote).items():
+                setattr(position, key, item)
             position.peak_bid = max(position.peak_bid or quote.bid, quote.bid)
             position.current_price = quote.bid
-        except (MarketDataError, OSError):
-            continue
+        except (MarketDataError, OSError) as error:
+            position.last_error = str(error)
+            position.quote_quality = "stale"

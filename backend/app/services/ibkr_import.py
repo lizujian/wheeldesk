@@ -27,8 +27,8 @@ from app.db_models import (
 )
 from app.domain.models import Bucket
 from app.domain.core import CORE_PUT_SYMBOLS, CORE_ROTATION_SYMBOLS, CORE_SYMBOLS
-from app.domain.leaps import LEAPS_CALL_WHEEL_CATEGORY
-from app.domain.pmcc import PMCC_CATEGORIES
+from app.domain.leaps import ADDITIONAL_LEAPS_ETFS, LEAPS_CALL_WHEEL_CATEGORY
+from app.domain.pmcc import PMCC_CATEGORIES, call_contract_key, share_covered_call_keys
 from app.db_models import CoreTradeRecord
 from app.domain.trillion_club import is_club_symbol, is_wheel_club_symbol
 from app.services.portfolio_store import PortfolioStore
@@ -141,12 +141,20 @@ class PositionRoll:
 class IbkrImportService:
     def __init__(self, session: Session) -> None:
         self.session = session
+        from app.market.settings import read_settings
+        self.club_symbols = read_settings(session).club_symbols
         self._preview_pmcc_allocations: dict[int, Decimal] = {}
+        self._preview_pmcc_closures: set[int] = set()
+        self._preview_share_calls: set[tuple] = set()
+        self._preview_share_call_ids: set[int] = set()
 
     def preview(self, filename: str, content: str) -> dict[str, Any]:
         # Preview rows are built before they are applied, so reserve coverage
         # locally to keep multiple short calls from selecting the same LEAPS.
         self._preview_pmcc_allocations = {}
+        self._preview_pmcc_closures = set()
+        self._preview_share_calls = set()
+        self._preview_share_call_ids = set()
         rows = parse_activity_statement(content)
         if not rows:
             raise ValueError("未识别到 IBKR Activity Statement CSV 数据行")
@@ -172,6 +180,25 @@ class IbkrImportService:
                 )
             )
         )
+        # IBKR lists ending positions before executions. A fully matched
+        # buyback in this statement releases coverage for the new short call.
+        for row in rows:
+            if _section_key(row.section) != "trades" or (
+                row.fingerprint in imported or row.legacy_fingerprint in imported
+            ):
+                continue
+            closing = self._preview_trade(row, roll_trade_fingerprints, opening_trades)
+            if (
+                closing
+                and closing["action"] in {"close_leaps_call", "close_unmanaged"}
+                and closing["details"].get("option_type") == "call"
+                and (
+                    closing["action"] == "close_leaps_call"
+                    or closing["details"].get("direction") == "short"
+                )
+            ):
+                self._preview_pmcc_closures.add(closing["details"]["holding_id"])
+        self._plan_share_coverage(rows)
         used_slots = self._used_leaps_slots()
         preview_rows: list[dict[str, Any]] = []
         recognized_sections: set[str] = set()
@@ -264,6 +291,8 @@ class IbkrImportService:
         if unknown:
             raise ValueError("导入选择已失效，请重新生成预览")
 
+        self._validate_pmcc_selection([available[value] for value in selected])
+
         default_selection = {
             row["fingerprint"] for row in snapshot["rows"] if row["selected"]
         }
@@ -279,7 +308,13 @@ class IbkrImportService:
             self._prepare_initial_account_summary(account_summary)
 
         results: list[dict[str, Any]] = []
-        for fingerprint in selected_fingerprints:
+        # Apply the buybacks used by preview's coverage plan before new calls,
+        # even when the user selected ending positions first.
+        ordered_fingerprints = sorted(
+            selected_fingerprints,
+            key=lambda value: not self._releases_pmcc_coverage(available[value]),
+        )
+        for fingerprint in ordered_fingerprints:
             item = available[fingerprint]
             if not item["can_import"] or item["status"] in {"duplicate", "unsupported"}:
                 raise ValueError(f"{item['instrument']} 当前不能直接导入")
@@ -313,11 +348,96 @@ class IbkrImportService:
                     "entity_id": entity_id,
                 }
             )
+        from app.services.etf_pmcc import reclassify_etf_pmcc
+        if reclassify_etf_pmcc(self.session):
+            self.session.commit()
         if default_selection <= selected:
             self._record_core_trades(parse_activity_statement(content))
         if account_summary:
             self._reconcile_account_summary(account_summary, filename)
         return {"imported": len(results), "results": results}
+
+    def _validate_pmcc_selection(self, items: list[dict[str, Any]]) -> None:
+        """A partial selection must include the buybacks freeing its coverage."""
+        closing_ids = {
+            item["details"]["holding_id"]
+            for item in items
+            if self._releases_pmcc_coverage(item) and item["can_import"]
+        }
+        planned: dict[int, Decimal] = {}
+        for item in items:
+            if item["action"] not in {"create_leaps_call", "update_leaps_call"}:
+                continue
+            details = item["details"]
+            position_id = details["linked_position_id"]
+            if position_id is None:
+                continue
+            if position_id not in planned:
+                used = self.session.scalar(
+                    select(func.coalesce(func.sum(UnmanagedPositionRecord.quantity), 0)).where(
+                        UnmanagedPositionRecord.status == "open",
+                        UnmanagedPositionRecord.category.in_(PMCC_CATEGORIES),
+                        UnmanagedPositionRecord.linked_position_id == position_id,
+                        UnmanagedPositionRecord.id.not_in(closing_ids),
+                    )
+                ) or ZERO
+                planned[position_id] = Decimal(str(used))
+            existing = (
+                self.session.get(UnmanagedPositionRecord, details["holding_id"])
+                if details["holding_id"] else None
+            )
+            if (
+                existing
+                and existing.category in PMCC_CATEGORIES
+                and existing.linked_position_id == position_id
+            ):
+                planned[position_id] -= existing.quantity
+            planned[position_id] += Decimal(str(details["quantity"]))
+
+        for position_id, quantity in planned.items():
+            position = self.session.get(PositionRecord, position_id)
+            capacity = position.quantity if position else ZERO
+            if position and position.asset_type == "equity":
+                capacity /= HUNDRED
+            if quantity > capacity:
+                raise ValueError("所选 PMCC Short Call 超出覆盖量，请同时选择释放覆盖额度的旧 Call 平仓记录")
+
+    @staticmethod
+    def _releases_pmcc_coverage(item: dict[str, Any]) -> bool:
+        return item["action"] in {"close_leaps_call", "close_unmanaged"} or (
+            item["action"] == "update_unmanaged"
+            and "linked_position_id" in item["details"]
+            and item["details"]["linked_position_id"] is None
+        )
+
+    def _plan_share_coverage(self, rows: list[StatementRow]) -> None:
+        holdings = list(self.session.scalars(select(UnmanagedPositionRecord).where(
+            UnmanagedPositionRecord.status == "open",
+        )))
+        shares: dict[str, Decimal] = {}
+        calls = {}
+        for holding in holdings:
+            if holding.asset_type == "equity" and holding.direction == "long" and holding.symbol != "QLD":
+                shares[holding.symbol] = shares.get(holding.symbol, ZERO) + holding.quantity
+            elif holding.option_type == "call" and holding.direction == "short" and holding.id not in self._preview_pmcc_closures:
+                calls[call_contract_key(holding)] = holding
+        snapshot_shares: dict[str, Decimal] = {}
+        for row in rows:
+            if _section_key(row.section) != "open_positions":
+                continue
+            contract = _contract(row.values)
+            if contract is None:
+                continue
+            if contract.asset_type == "equity" and contract.symbol != "QLD":
+                snapshot_shares[contract.symbol] = snapshot_shares.get(contract.symbol, ZERO) + max(contract.quantity, ZERO)
+            elif contract.option_type == "call" and contract.quantity < ZERO:
+                calls[call_contract_key(contract)] = contract
+        shares.update(snapshot_shares)
+        self._preview_share_calls = share_covered_call_keys(calls.values(), shares)
+        self._preview_share_call_ids = {
+            holding.id for holding in holdings
+            if holding.option_type == "call" and call_contract_key(holding) in self._preview_share_calls
+        }
 
     def _record_core_trades(self, rows: list[StatementRow]) -> None:
         quantities = {symbol: ZERO for symbol in CORE_ROTATION_SYMBOLS}
@@ -701,9 +821,9 @@ class IbkrImportService:
         confidence: str,
         used_slots: dict[str, set[int]],
     ) -> dict[str, Any]:
-        if contract.symbol != "QQQ" and not is_club_symbol(contract.symbol):
-            return self._preview_unmanaged(row, contract, opened_on, confidence)
         existing_rows = self._matching_positions(contract)
+        if contract.symbol not in {"QQQ", *ADDITIONAL_LEAPS_ETFS} and not is_club_symbol(contract.symbol, self.club_symbols) and not existing_rows:
+            return self._preview_unmanaged(row, contract, opened_on, confidence)
         if len(existing_rows) > 1:
             exact = _position_group_matches(existing_rows, contract)
             return self._item(
@@ -722,6 +842,11 @@ class IbkrImportService:
                 details=_contract_details(contract, opened_on),
             )
         existing = existing_rows[0] if existing_rows else None
+        unmanaged = self._matching_unmanaged(contract, "long") if contract.symbol in ADDITIONAL_LEAPS_ETFS and not existing else []
+        if len(unmanaged) > 1:
+            return self._item(row, instrument=_instrument_label(contract), action="skip", status="review",
+                confidence="low", selected=False, can_import=False, message="同一 ETF 合约存在多个待归类批次，需要人工核对",
+                details=_contract_details(contract, opened_on))
         slot_key = contract.symbol if contract.symbol != "QQQ" else "QQQ"
         max_slots = 2 if contract.symbol != "QQQ" else 5
         tranche = existing.tranche if existing else _claim_slot(used_slots, slot_key, max_slots)
@@ -731,6 +856,7 @@ class IbkrImportService:
             tranche=tranche,
             position_id=existing.id if existing else None,
             underlying_entry_price=None,
+            promote_holding_id=unmanaged[0].id if unmanaged else None,
         )
         if tranche is None:
             return self._item(
@@ -769,9 +895,11 @@ class IbkrImportService:
         position_contract: Contract,
         roll: PositionRoll,
     ) -> dict[str, Any]:
-        if position_contract.symbol != "QQQ" and not is_club_symbol(
-            position_contract.symbol
-        ):
+        current_rows = self._matching_positions(position_contract)
+        previous_rows = self._matching_positions(roll.closing_contract)
+        if position_contract.symbol not in {"QQQ", *ADDITIONAL_LEAPS_ETFS} and not is_club_symbol(
+            position_contract.symbol, self.club_symbols
+        ) and not current_rows and not previous_rows:
             return self._item(
                 roll.opening_row,
                 instrument=f"{position_contract.symbol} Long Call 展期",
@@ -787,7 +915,6 @@ class IbkrImportService:
                 ),
             )
 
-        current_rows = self._matching_positions(position_contract)
         current = current_rows[0] if len(current_rows) == 1 else None
         if current is not None and current.rolled_from_position_id is not None:
             previous = self.session.get(
@@ -824,7 +951,6 @@ class IbkrImportService:
                 details=_contract_details(position_contract, roll.traded_at.date()),
             )
 
-        previous_rows = self._matching_positions(roll.closing_contract)
         if len(previous_rows) != 1:
             return self._item(
                 roll.opening_row,
@@ -998,29 +1124,19 @@ class IbkrImportService:
                 details=details,
             )
         needs_reference = not existing and details["underlying_entry_price"] is None
-        needs_earnings = (
-            not is_core_put
-            and contract.symbol != "TQQQ"
-            and not details["earnings_confirmed"]
-        )
         return self._item(
             row,
             instrument=_instrument_label(contract),
             action="update_wheel_put" if existing else "create_wheel_put",
             status="ready",
-            confidence="estimated" if needs_reference or needs_earnings else confidence,
+            confidence="estimated" if needs_reference else confidence,
             selected=True,
             can_import=True,
             message=(
-            "新增核心仓 Sell Put 建仓；接股后转入核心仓，禁止自动 Covered Call"
+                "新增核心仓 Sell Put 建仓；接股后转入核心仓，禁止自动 Covered Call"
                 if is_core_put
-                else
-                "新增 Sell Put；报表未提供开仓正股价与财报确认，保留为待刷新参考"
-                if needs_reference and needs_earnings
                 else "新增 Sell Put；报表未提供开仓正股价，保留为待刷新参考"
                 if needs_reference
-                else "新增 Sell Put；报表未提供财报确认"
-                if needs_earnings
                 else "更新现有 Sell Put"
             ),
             details=details,
@@ -1164,6 +1280,8 @@ class IbkrImportService:
         confidence: str,
     ) -> dict[str, Any] | None:
         """Classify a short call covered by a LEAPS call or QLD replacement."""
+        if call_contract_key(contract) in self._preview_share_calls:
+            return None
         quantity = abs(int(contract.quantity))
         existing = self._matching_leaps_calls(contract)
         if len(existing) > 1:
@@ -1205,16 +1323,23 @@ class IbkrImportService:
         candidate = self._single_covering_leaps_position(contract.symbol, quantity)
         if candidate is None:
             return None
+        unmanaged = self._matching_unmanaged(contract, "short")
+        if len(unmanaged) > 1:
+            # Leave ambiguous existing records to the unmanaged review path.
+            self._preview_pmcc_allocations[candidate.id] -= Decimal(quantity)
+            return None
+        if unmanaged:
+            details["holding_id"] = unmanaged[0].id
         details["linked_position_id"] = candidate.id
         return self._item(
             row,
             instrument=_instrument_label(contract),
-            action="create_leaps_call",
+            action="update_leaps_call" if unmanaged else "create_leaps_call",
             status="ready",
             confidence=confidence,
             selected=True,
             can_import=True,
-            message=f"新增 {contract.symbol} PMCC Short Call，关联 Long Call #{candidate.id}",
+            message=f"{'重新归类' if unmanaged else '新增'} {contract.symbol} PMCC Short Call，关联 Long Call #{candidate.id}",
             details=details,
         )
 
@@ -1314,8 +1439,12 @@ class IbkrImportService:
                 else "other"
             ),
         )
+        if call_contract_key(contract) in self._preview_share_calls:
+            details["linked_position_id"] = None
         exact = existing is not None and (
-            existing.quantity == abs(contract.quantity)
+            existing.category == details["category"]
+            and existing.linked_position_id is None
+            and existing.quantity == abs(contract.quantity)
             and (
                 existing.entry_price is None
                 or _price_matches(existing.entry_price, contract.cost_price)
@@ -1761,27 +1890,36 @@ class IbkrImportService:
         if action == "create_position":
             if details["bucket"] == Bucket.CORE.value:
                 PortfolioStore(self.session).auto_fund_core(entry_price * quantity, date.fromisoformat(details["opened_on"]))
-            record = PositionRecord(
-                rolled_from_position_id=details.get("rolled_from_position_id"),
-                bucket=details["bucket"],
-                symbol=details["symbol"],
-                asset_type=details["asset_type"],
-                direction="long",
-                option_type=details.get("option_type"),
-                quantity=quantity,
-                multiplier=100 if details["asset_type"] == "option" else 1,
-                entry_price=entry_price,
-                current_price=current_price,
-                opened_on=date.fromisoformat(details["opened_on"]),
-                expiration=date.fromisoformat(details["expiration"]) if details.get("expiration") else None,
-                strike=Decimal(str(details["strike"])) if details.get("strike") is not None else None,
-                tranche=int(details["tranche"]) if details.get("tranche") else None,
-                underlying_entry_price=None,
-                entry_fees=ZERO,
-            )
-            self.session.add(record)
-            self.session.flush()
-            event_type = "position_open"
+            if details.get("promote_holding_id"):
+                from app.services.etf_pmcc import promote_etf_long
+                holding = self.session.get(UnmanagedPositionRecord, details["promote_holding_id"])
+                if holding is None or holding.status != "open" or holding.symbol not in ADDITIONAL_LEAPS_ETFS:
+                    raise ValueError("待归类 ETF 持仓已变化，请重新预览")
+                record = promote_etf_long(self.session, holding, int(details["tranche"]))
+                record.quantity, record.entry_price, record.current_price = quantity, entry_price, current_price
+                event_type = "broker_reconcile"
+            else:
+                record = PositionRecord(
+                    rolled_from_position_id=details.get("rolled_from_position_id"),
+                    bucket=details["bucket"],
+                    symbol=details["symbol"],
+                    asset_type=details["asset_type"],
+                    direction="long",
+                    option_type=details.get("option_type"),
+                    quantity=quantity,
+                    multiplier=100 if details["asset_type"] == "option" else 1,
+                    entry_price=entry_price,
+                    current_price=current_price,
+                    opened_on=date.fromisoformat(details["opened_on"]),
+                    expiration=date.fromisoformat(details["expiration"]) if details.get("expiration") else None,
+                    strike=Decimal(str(details["strike"])) if details.get("strike") is not None else None,
+                    tranche=int(details["tranche"]) if details.get("tranche") else None,
+                    underlying_entry_price=None,
+                    entry_fees=ZERO,
+                )
+                self.session.add(record)
+                self.session.flush()
+                event_type = "position_open"
         else:
             record = self.session.get(PositionRecord, int(details["position_id"]))
             if record is None or record.status != "open":
@@ -1829,6 +1967,7 @@ class IbkrImportService:
         return record.id
 
     def _apply_unmanaged(self, action: str, details: dict[str, Any]) -> int:
+        previous_category = None
         if action == "create_unmanaged":
             record = UnmanagedPositionRecord(
                 category=details["category"],
@@ -1859,13 +1998,27 @@ class IbkrImportService:
             record = self.session.get(UnmanagedPositionRecord, int(details["holding_id"]))
             if record is None:
                 raise ValueError("待更新其他持仓不存在，请重新预览")
+            previous_category = record.category
             record.quantity = Decimal(str(details["quantity"]))
             record.entry_price = Decimal(str(details["cost_price"])) or record.entry_price
             record.current_price = Decimal(str(details["close_price"])) or record.current_price
             if details.get("category"):
                 record.category = details["category"]
-            if details.get("linked_position_id") is not None:
-                record.linked_position_id = int(details["linked_position_id"])
+            if "linked_position_id" in details:
+                record.linked_position_id = (
+                    int(details["linked_position_id"])
+                    if details["linked_position_id"] is not None else None
+                )
+        if previous_category is not None and previous_category != record.category:
+            entity_type = (
+                "leaps_call_wheel" if record.category in PMCC_CATEGORIES
+                else "unmanaged_position"
+            )
+            for imported in self.session.scalars(select(BrokerImportRecord).where(
+                BrokerImportRecord.entity_type.in_({"unmanaged_position", "leaps_call_wheel"}),
+                BrokerImportRecord.entity_id == record.id,
+            )):
+                imported.entity_type = entity_type
         record.quote_source = "ibkr_statement"
         record.quote_as_of = date.fromisoformat(
             details.get("report_as_of") or date.today().isoformat()
@@ -2119,6 +2272,9 @@ class IbkrImportService:
                     UnmanagedPositionRecord.status == "open",
                     UnmanagedPositionRecord.category.in_(PMCC_CATEGORIES),
                     UnmanagedPositionRecord.linked_position_id == candidate.id,
+                    UnmanagedPositionRecord.id.not_in(
+                        self._preview_pmcc_closures | self._preview_share_call_ids
+                    ),
                 )
             ) or ZERO
             reserved = self._preview_pmcc_allocations.get(candidate.id, ZERO)

@@ -7,7 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.api.market import get_market_provider, get_option_provider
+from app.api.market import get_market_provider, get_option_provider, get_vix_provider
 from app.db import get_session
 from app.db_models import Base, BucketBalance
 from app.domain.indicators import DailyBar
@@ -57,6 +57,7 @@ def risk_client():
     provider = TwoDayBreakProvider()
     app.dependency_overrides[get_session] = override_session
     app.dependency_overrides[get_market_provider] = lambda: provider
+    app.dependency_overrides[get_vix_provider] = app.dependency_overrides[get_market_provider]
     app.dependency_overrides[get_option_provider] = lambda: provider
     try:
         yield TestClient(app)

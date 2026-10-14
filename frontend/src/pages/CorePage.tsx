@@ -166,6 +166,7 @@ function CoreAssetRow({ asset, selected, totalValue }: { asset: CoreAssetDecisio
 function CoreBuySignal({ decision }: { decision: CoreStrategyDecision | null }) {
   const recommendation = decision?.recommendation
   if (!decision) return <section className="core-signal waiting" aria-label="核心仓买入建议"><Gauge size={19} /><div><span>等待行情</span><strong>刷新后计算新增资金优先标的</strong></div></section>
+  if (decision.assets?.some((asset) => asset.code === 'vix_unavailable')) return <section className="core-signal waiting" aria-label="核心仓买入建议"><Gauge size={19} /><div><span>VIX 暂不可用</span><strong>等待 VIX 恢复后计算核心仓买入建议</strong></div></section>
   if (decision.mode === 'full') return <section className="core-signal waiting" aria-label="核心仓买入建议"><Gauge size={19} /><div><span>核心仓已满</span><strong>暂停普通定投，转入满仓轮换监控</strong><small>满仓阈值 {formatMoney(decision.full_threshold)}</small></div></section>
   if ((decision.pending_put_collateral ?? 0) > 0 && !recommendation?.actionable) return <section className="core-signal waiting" aria-label="核心仓买入建议"><ShieldCheck size={20} /><div><span>已有 Put 建仓安排</span><strong>{decision.unplanned_gap === 0 ? '待接股安排已覆盖目标，暂无新增容量' : '暂停常规定投，等待明显回调机会'}</strong><small>待接股担保 {formatMoney(decision.pending_put_collateral ?? 0)} · 未安排缺口 {formatMoney(decision.unplanned_gap ?? 0)}</small></div></section>
   if (!recommendation) return <section className="core-signal waiting" aria-label="核心仓买入建议"><Gauge size={19} /><div><span>等待</span><strong>当前没有可执行的新增买入建议</strong></div></section>

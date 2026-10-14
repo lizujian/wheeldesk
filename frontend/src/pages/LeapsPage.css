@@ -11,7 +11,7 @@
 .leaps-stock-list > header .section-title { margin: 0; align-items: center; }
 .leaps-stock-list > header .section-title > span { color: var(--muted); font-size: 10px; }
 .leaps-stock-table { min-width: 0; overflow-x: auto; }
-.leaps-stock-row { min-width: 860px; min-height: 58px; display: grid; grid-template-columns: minmax(160px, 1.35fr) repeat(4, minmax(100px, .75fr)) minmax(100px, .85fr) minmax(180px, 1.3fr); gap: 12px; align-items: center; padding: 0 20px; border-bottom: 1px solid var(--line); font-size: 11px; }
+.leaps-stock-row { min-width: 1180px; min-height: 64px; display: grid; grid-template-columns: minmax(120px, 1fr) minmax(200px, 1.8fr) minmax(80px, .7fr) minmax(60px, .5fr) minmax(155px, 1.3fr) minmax(190px, 1.8fr) minmax(260px, 2.5fr); gap: 12px; align-items: center; padding: 10px 20px; border-bottom: 1px solid var(--line); font-size: 11px; font-variant-numeric: tabular-nums; }
 .leaps-stock-row:last-child { border-bottom: 0; }
 .leaps-stock-row.head { min-height: 36px; color: var(--muted); background: #f5f7f5; font-size: 9px; font-weight: 800; }
 .leaps-stock-row > * { min-width: 0; }
@@ -20,14 +20,29 @@
 .leaps-stock-name { display: grid; gap: 3px; }
 .leaps-stock-name strong { color: var(--ink); font: 700 15px Georgia, "Songti SC", serif; }
 .leaps-stock-name small { color: var(--muted); font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.leaps-stock-price { display: grid; gap: 4px; }
+.leaps-stock-price > div { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.leaps-stock-price strong { font-size: 11px; }
+.leaps-ma-distance { font-size: 9px; color: var(--muted); white-space: nowrap; }
+.leaps-stock-price small { color: var(--muted); font-size: 9px; line-height: 1.5; }
+.leaps-stock-price small > span { display: block; }
 .leaps-stock-row .positive { color: var(--green); }
 .leaps-stock-row .negative { color: var(--red); }
-.leaps-stock-status { width: fit-content; padding: 4px 7px; font-size: 9px; font-weight: 800; }
-.leaps-stock-status.ready { color: var(--green); background: #e1f2ea; }
-.leaps-stock-status.partial { color: #87611b; background: #f8efd9; }
-.leaps-stock-status.waiting { color: var(--muted); background: #edf0ee; }
-.leaps-stock-status.unavailable { color: #87611b; background: #f8efd9; }
-.leaps-stock-note { overflow-wrap: anywhere; }
+.leaps-stock-iv { display: grid; gap: 4px; }
+.leaps-stock-iv > div { display: flex; align-items: baseline; gap: 8px; white-space: nowrap; }
+.leaps-stock-iv strong { font-size: 11px; }
+.leaps-stock-iv time, .leaps-stock-iv small { color: var(--muted); font-size: 9px; }
+.leaps-iv-change { font-size: 10px; font-weight: 700; }
+.leaps-stock-occupancy { display: flex; align-items: baseline; gap: 4px; white-space: nowrap; }
+.leaps-stock-occupancy > span { color: var(--muted); font-size: 10px; }
+.leaps-entry-explanation { display: grid; gap: 4px; color: var(--muted); font-size: 10px; line-height: 1.65; }
+.leaps-vix-band { display: grid; grid-template-columns: 1fr 1fr 1.5fr; border: 1px solid var(--line); background: var(--paper); }
+.leaps-vix-band > div { display: grid; gap: 6px; padding: 15px 20px; border-right: 1px solid var(--line); }
+.leaps-vix-band > div:nth-child(3) { border-right: 0; }
+.leaps-vix-band span { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; }
+.leaps-vix-band strong { color: var(--leaps-accent); font: 700 25px Georgia, "Songti SC", serif; font-variant-numeric: tabular-nums; }
+.leaps-vix-band small, .leaps-vix-band > p { color: var(--muted); font-size: 10px; line-height: 1.6; }
+.leaps-vix-band > p { grid-column: 1 / -1; margin: 0; padding: 8px 20px; border-top: 1px solid var(--line); }
 
 .leaps-budget-band { min-height: 104px; background: var(--paper); border: 1px solid var(--line); display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .leaps-budget-band > div { padding: 17px 20px; border-right: 1px solid var(--line); display: grid; grid-template-columns: 24px 1fr; align-content: center; gap: 4px 7px; min-width: 0; }
@@ -43,13 +58,6 @@
 .leaps-fifo-alert > div { display: grid; gap: 3px; }
 .leaps-fifo-alert span { color: #806633; font-size: 10px; }
 
-.leaps-policy-strip { min-height: 68px; background: var(--paper); border: 1px solid var(--line); display: grid; grid-template-columns: 1fr 1.25fr 1fr .8fr; }
-.leaps-policy-strip > div { border-right: 1px solid var(--line); padding: 12px 16px; display: grid; align-content: center; gap: 4px; }
-.leaps-policy-strip > div:last-child { border-right: 0; }
-.leaps-policy-strip span { color: var(--muted); font-size: 9px; }
-.leaps-policy-strip strong { font-size: 11px; }
-.leaps-policy-strip .guardrail { display: flex; align-items: center; gap: 7px; color: var(--red); font-weight: 800; }
-.leaps-policy-strip .guardrail span { color: inherit; }
 
 .leaps-holdings-register { border: 1px solid var(--line); background: var(--paper); padding: 21px; display: grid; gap: 15px; }
 .leaps-holdings-register > header .section-title { margin: 0; }
@@ -149,6 +157,9 @@
 }
 
 @media (max-width: 640px) {
+  .leaps-vix-band { grid-template-columns: 1fr; }
+  .leaps-vix-band > div { border-right: 0; border-bottom: 1px solid var(--line); }
+  .leaps-vix-band > div:nth-child(3) { border-bottom: 0; }
   .leaps-view-tabs { width: 100%; }
   .leaps-view-tabs button { min-width: 0; flex: 1; padding-inline: 9px; }
   .leaps-stock-list > header { padding: 16px; }

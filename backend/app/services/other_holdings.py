@@ -1,3 +1,4 @@
+from app.market.base import stored_quote_metadata
 from datetime import date
 from decimal import Decimal
 
@@ -211,6 +212,7 @@ class OtherHoldingService:
             "realized_profit": record.realized_profit,
             "quote_source": record.quote_source,
             "quote_as_of": record.quote_as_of,
+            **stored_quote_metadata(record),
             "quote_status": quote_status,
             "last_error": record.last_error,
             "linked_position_id": record.linked_position_id,

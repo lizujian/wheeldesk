@@ -169,7 +169,7 @@ function EntryChecks({ market }: { market: MarketSnapshot | null }) {
       <div className="quote-grid">
         <div><span>QQQ</span><strong>{formatMoney(market.market.qqq.price)}</strong><small>MA200 {formatMoney(market.market.qqq.ma200)}</small></div>
         <div><span>RSI14</span><strong>{market.market.qqq.rsi14.toFixed(1)}</strong><small>{market.market.qqq.bearish ? '阴线' : '阳线'}</small></div>
-        <div><span>VIX</span><strong>{market.market.vix.price.toFixed(1)}</strong><small>{market.market.vix.price >= 30 ? '现金评估' : '常态区间'}</small></div>
+        <div><span>VIX · {market.market.vix.source === 'ibkr' ? 'IBKR' : market.market.vix.source ?? '待刷新'}</span><strong>{market.market.vix.price?.toFixed(1) ?? '不可用'}</strong><small>{market.market.vix.price == null ? '等待行情' : market.market.vix.price >= 30 ? '现金评估' : '常态区间'}</small></div>
       </div>
     </> : <EmptyMarket />}
   </section>
@@ -207,14 +207,14 @@ function ClubWheelDesk({ market }: { market: MarketSnapshot | null }) {
     <section className="club-wheel-rules">
       <div><Gauge size={18} /><span>趋势与动能</span><strong>QQQ / 个股 &gt; SMA200</strong><small>RSI14 &lt; 40 · 当日跌幅至少 3%</small></div>
       <div><Target size={18} /><span>合约参考</span><strong>支撑位下方</strong><small>30–45 DTE · Delta 0.15–0.25</small></div>
-      <div><ShieldAlert size={18} /><span>集中与事件</span><strong>单股最多总资产 5%</strong><small>整个类别每周确认一次 · 到期前无财报</small></div>
+      <div><ShieldAlert size={18} /><span>集中度</span><strong>单股最多总资产 5%</strong><small>整个类别每周确认一次</small></div>
     </section>
     <section className="club-wheel-board" aria-label="万亿俱乐部车轮候选">
       <div className="section-title"><div><p>CLUB WATCHLIST</p><h2>个股 Sell Put 候选</h2></div><span>与 LEAPS 共用期权策略额度 · BRK-B 已排除</span></div>
       {!market && <EmptyMarket />}
       {market && decisions.length === 0 && <div className="wheel-empty"><Landmark size={22} /><p>本次没有可评估的公开候选</p></div>}
       {decisions.length > 0 && <div className="club-wheel-table">
-        <div className="club-wheel-head" aria-hidden="true"><span>标的 / 状态</span><span>当日行情</span><span>趋势过滤</span><span>支撑 / 担保</span><span>财报</span></div>
+        <div className="club-wheel-head" aria-hidden="true"><span>标的 / 状态</span><span>当日行情</span><span>趋势过滤</span><span>支撑 / 担保</span><span>数据状态</span></div>
         {decisions.map((decision) => {
           const blocked = decision.active_cycle
           const risk = decision.high_risk_put_ids.length > 0
@@ -223,7 +223,7 @@ function ClubWheelDesk({ market }: { market: MarketSnapshot | null }) {
             <div><span>当前价</span><strong>{decision.current_price == null ? '—' : formatMoney(decision.current_price)}</strong><em className={(decision.change_fraction ?? 0) < 0 ? 'loss' : 'gain'}>{formatChange(decision.change_fraction)}</em></div>
             <div className="club-wheel-checks"><span className={decision.checks.stock_above_ma200 ? 'pass' : ''}>个股 &gt; SMA200</span><span className={decision.checks.qqq_above_ma200 ? 'pass' : ''}>QQQ &gt; SMA200</span><span className={decision.checks.rsi_below_40 ? 'pass' : ''}>RSI {decision.rsi14.toFixed(1)}</span><span className={decision.checks.daily_drop ? 'pass' : ''}>跌幅 ≥ 3%</span></div>
             <div><span>参考行权价</span><strong>{decision.reference_strike == null ? '等待支撑' : formatMoney(decision.reference_strike)}</strong><small>{decision.preferred_support ? `支撑 ${formatMoney(decision.preferred_support.price)} · 担保 ${formatMoney(decision.one_contract_collateral ?? 0)}` : '未识别重复支撑'}</small>{(decision.over_budget || decision.over_concentration) && <em className="loss">{decision.over_budget ? '超过可用预算' : '超过单股 5%'}</em>}</div>
-            <div><span>下一财报</span><strong>{decision.earnings_available ? decision.next_earnings_date ?? '45 天外' : '需人工核对'}</strong><small>{decision.checks.earnings_clear ? '当前窗口可评估' : '合约窗口内有财报'}</small></div>
+            <div><span>观察列表</span><strong>手动维护</strong><small>暂不使用财报条件</small></div>
             {risk && <div className="club-wheel-row-alert" role="alert"><ShieldAlert size={15} />连续两日低于个股 SMA200，现有仓位面临行权或持股风险，请优先评估防御。</div>}
           </article>
         })}

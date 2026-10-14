@@ -170,6 +170,12 @@ class SignalService:
         if changed:
             self.session.commit()
 
+    def retire_market_signals(self, prefixes=("ma200_break", "vix_high", "core_buy_", "core_rotation_", "leaps_entry_", "leaps_etf_", "trillion_club_")) -> None:
+        for record in self.session.scalars(select(SignalRecord).where(SignalRecord.acknowledged.is_(False))):
+            if record.code.startswith(prefixes):
+                record.acknowledged = True
+        self.session.commit()
+
     def list_active(self) -> list[SignalRecord]:
         return self.list_recent(include_acknowledged=False)
 

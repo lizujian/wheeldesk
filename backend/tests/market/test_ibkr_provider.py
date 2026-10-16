@@ -39,7 +39,7 @@ class Connection:
                        low=99, close=100, volume=1000) for days in range(350,-1,-1)]
         raise AssertionError(method)
 
-    def error_for(self, con_id):
+    def error_for(self, con_id, *, sec_type=""):
         return "IBKR 10089：API 行情未订阅"
 
 
@@ -118,6 +118,60 @@ def test_missing_option_quote_keeps_failure_explicit():
     connection = Connection(); connection.missing = True
     with pytest.raises(MarketDataError, match="10089"):
         provider(connection).option_quote("AVGO", "call", EXPIRY, Decimal(390))
+
+
+def test_option_subscription_error_reports_exhausted_fallbacks_not_another_delayed_retry(monkeypatch):
+    class Client:
+        def __init__(self):
+            self.modes = []
+            self.cancelled = []
+        def isConnected(self):
+            return True
+        async def reqContractDetailsAsync(self, contract):
+            contract.conId = 102
+            return [SimpleNamespace(contract=contract)]
+        def reqMarketDataType(self, value):
+            self.modes.append(value)
+        def reqMktData(self, contract, *args):
+            self.ticker = SimpleNamespace(contract=contract)
+            return self.ticker
+        def cancelMktData(self, contract):
+            self.cancelled.append(contract)
+        def disconnect(self):
+            pass
+
+    client = Client()
+    connection = IbkrConnection("unused", 4001)
+    connection._ib = client
+    async def deliver_partial_quote(delay):
+        ticker = client.ticker
+        ticker.bid = ticker.ask = -1
+        ticker.close = 4.02
+        ticker.marketDataType = 1
+        ticker.time = NOW
+        connection._errors[ticker.contract.conId] = 10091
+    monkeypatch.setattr(asyncio, "sleep", deliver_partial_quote)
+    try:
+        with pytest.raises(MarketDataError) as caught:
+            provider(connection).option_quote("AVGO", "call", EXPIRY, Decimal(390))
+        assert client.modes == [3, 2, 4]
+        assert len(client.cancelled) == 3
+        message = str(caught.value)
+        assert "10091" in message
+        assert "已尝试延迟及收市行情" in message
+        assert "OPRA" in message
+        assert "开盘后" in message and "全量刷新" in message
+        assert "保留上次估值" in message
+        assert "可尝试延迟行情" not in message
+        async def deliver_no_quote(delay):
+            pass
+        monkeypatch.setattr(asyncio, "sleep", deliver_no_quote)
+        p = provider(connection)
+        with pytest.raises(MarketDataError, match="未返回可用报价"):
+            p.option_quote("AVGO", "call", EXPIRY, Decimal(390))
+        assert 102 not in connection._errors
+    finally:
+        connection.close()
 
 
 def test_stock_alias_and_readonly_connection_rejects_order_operations():

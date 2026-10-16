@@ -191,7 +191,7 @@ class IbkrImportService:
                 row.fingerprint in imported or row.legacy_fingerprint in imported
             ):
                 continue
-            closing = self._preview_trade(row, roll_trade_fingerprints, opening_trades)
+            closing = self._preview_trade(row, roll_trade_fingerprints, opening_trades, planning_rows)
             if (
                 closing
                 and closing["action"] in {"close_leaps_call", "close_unmanaged"}
@@ -234,6 +234,7 @@ class IbkrImportService:
                     row,
                     roll_trade_fingerprints,
                     opening_trades,
+                    planning_rows,
                 )
             if item is None:
                 continue
@@ -332,11 +333,14 @@ class IbkrImportService:
             self._prepare_initial_account_summary(account_summary)
 
         results: list[dict[str, Any]] = []
-        # Apply the buybacks used by preview's coverage plan before new calls,
-        # even when the user selected ending positions first.
+        # Buybacks release coverage before new calls. Equity sale history is
+        # recorded after ending snapshots so it never deducts shares twice.
         ordered_fingerprints = sorted(
             dict.fromkeys(selected_fingerprints),
-            key=lambda value: not self._releases_pmcc_coverage(available[value]),
+            key=lambda value: (
+                not self._releases_pmcc_coverage(available[value]),
+                available[value]["action"] == "record_equity_sale",
+            ),
         )
         for fingerprint in ordered_fingerprints:
             item = available[fingerprint]
@@ -644,10 +648,11 @@ class IbkrImportService:
                 )
                 for record in records:
                     dates.extend(stamp for stamp in (getattr(record, "opened_on", None), getattr(record, "trade_date", None), record.closed_on) if stamp)
-                    # Older databases did not retain statement chronology. Until
-                    # a dated statement establishes it, reject ambiguous older
-                    # snapshots conservatively. Subsequent quotes never advance it.
-                    if previous is None and record.quote_as_of and not matches_current:
+                    # Older databases did not retain statement chronology. An
+                    # ambiguous legacy date remains a conservative fallback,
+                    # but a known market retrieval time is never a position date.
+                    if (previous is None and record.quote_as_of
+                        and record.quote_fetched_at is None and not matches_current):
                         stamp = record.quote_as_of
                         dates.append(stamp.date() if isinstance(stamp, datetime) else stamp)
         return bool(dates and (row.report_as_of is None or row.report_as_of < max(dates)))
@@ -1570,6 +1575,7 @@ class IbkrImportService:
         row: StatementRow,
         roll_trade_fingerprints: set[str],
         opening_trades: dict[tuple[Any, ...], list[tuple[StatementRow, Contract, datetime]]],
+        statement_rows: list[StatementRow],
     ) -> dict[str, Any] | None:
         if row.fingerprint in roll_trade_fingerprints:
             return None
@@ -1593,6 +1599,11 @@ class IbkrImportService:
             closed_on=traded_at.date().isoformat(),
             exit_price=float(contract.cost_price),
         )
+
+        if contract.asset_type == "equity" and contract.quantity < ZERO:
+            sale = self._preview_equity_sale(row, contract, details, statement_rows)
+            if sale is not None:
+                return sale
 
         if contract.option_type == "put" and contract.quantity > ZERO:
             puts = self._matching_puts(contract)
@@ -1750,6 +1761,55 @@ class IbkrImportService:
             details=details,
         )
 
+    def _preview_equity_sale(
+        self, row: StatementRow, contract: Contract, details: dict[str, Any],
+        statement_rows: list[StatementRow],
+    ) -> dict[str, Any] | None:
+        """A retained equity snapshot owns quantity; executions supply sale history."""
+        endings = [
+            candidate for other in statement_rows
+            if _section_key(other.section) == "open_positions"
+            and _value(other.values, "Currency").upper() == "USD"
+            and (candidate := _contract(other.values)) is not None
+            and candidate.key == contract.key and candidate.quantity > ZERO
+        ]
+        if not endings:
+            return None  # Whole-position exits use the existing close path.
+        holdings = self._matching_unmanaged(contract, "long")
+        executions = [
+            (other, candidate) for other in statement_rows
+            if _section_key(other.section) == "trades"
+            and _value(other.values, "Currency").upper() == "USD"
+            and (candidate := _contract(other.values)) is not None
+            and candidate.key == contract.key
+        ]
+        sold = sum((-candidate.quantity for _, candidate in executions), ZERO)
+        only_sales = all(candidate.quantity < ZERO and "C" in _value(other.values, "Code").split(";")
+                         for other, candidate in executions)
+        basis = _value(row.values, "Basis")
+        realized = _value(row.values, "Realized P/L")
+        if (len(endings) != 1 or len(holdings) != 1 or not only_sales
+            or holdings[0].quantity not in {endings[0].quantity, endings[0].quantity + sold}
+            or not basis or _decimal(basis) >= ZERO or not realized):
+            return self._item(row, instrument=contract.symbol, action="skip", status="review",
+                confidence="low", selected=False, can_import=False,
+                message="部分卖出需唯一匹配持仓、期末数量及券商成本和已实现损益，请核对报表", details=details)
+        holding = holdings[0]
+        details.update(
+            holding_id=holding.id,
+            category=holding.category,
+            direction="long",
+            opened_on=(holding.opened_on.isoformat() if holding.opened_on else details["closed_on"]),
+            entry_price=str(-_decimal(basis) / abs(contract.quantity)),
+            realized_profit=str(_decimal(realized)),
+            remaining_quantity=str(endings[0].quantity),
+            remaining_cost_price=str(endings[0].cost_price),
+        )
+        return self._item(row, instrument=contract.symbol, action="record_equity_sale", status="ready",
+            confidence="exact", selected=True, can_import=True,
+            message=f"记录卖出 {abs(contract.quantity):g} 股，期末保留 {endings[0].quantity:g} 股；已实现 ${_decimal(realized):,.2f}",
+            details=details)
+
     def _apply(
         self,
         item: dict[str, Any],
@@ -1809,6 +1869,16 @@ class IbkrImportService:
             return "unmanaged_position", int(details["holding_id"])
         if action == "record_closed_unmanaged":
             return "unmanaged_position", self._apply_closed_unmanaged(details)
+        if action == "record_equity_sale":
+            holding = self.session.get(UnmanagedPositionRecord, int(details["holding_id"]))
+            if (holding is None or holding.status != "open"
+                or holding.quantity != Decimal(details["remaining_quantity"])
+                or not _price_matches(holding.entry_price or ZERO, Decimal(details["remaining_cost_price"]))):
+                raise ValueError("部分卖出需同时同步对应的期末持仓快照，请重新导入完整报表")
+            return "unmanaged_position", self._apply_closed_unmanaged(
+                details, category=holding.category,
+                broker_realized_profit=Decimal(str(details["realized_profit"])),
+            )
         raise ValueError(f"不支持的导入操作：{action}")
 
     def _apply_position_close(self, details: dict[str, Any]) -> int:
@@ -1932,7 +2002,10 @@ class IbkrImportService:
         self.session.flush()
         return current.id
 
-    def _apply_closed_unmanaged(self, details: dict[str, Any]) -> int:
+    def _apply_closed_unmanaged(
+        self, details: dict[str, Any], *, category: str = "other",
+        broker_realized_profit: Decimal | None = None,
+    ) -> int:
         direction = details["direction"]
         quantity = Decimal(str(details["quantity"]))
         entry_price = Decimal(str(details["entry_price"]))
@@ -1940,8 +2013,10 @@ class IbkrImportService:
         multiplier = 100 if details["asset_type"] == "option" else 1
         signed = Decimal("1") if direction == "long" else Decimal("-1")
         realized = (exit_price - entry_price) * quantity * multiplier * signed
+        if broker_realized_profit is not None:
+            realized = broker_realized_profit
         record = UnmanagedPositionRecord(
-            category="other",
+            category=category,
             symbol=details["symbol"],
             asset_type=details["asset_type"],
             direction=direction,

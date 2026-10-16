@@ -39,7 +39,7 @@ class Connection:
                 close=110 if i == 0 else 100, volume=10) for i in [2, 1, 0]]
         raise AssertionError(method)
 
-    def error_for(self, con_id): return 'night quote unavailable'
+    def error_for(self, con_id, *, sec_type=""): return 'night quote unavailable'
 
 
 @pytest.mark.parametrize('hour,session,previous', [(8,'pre',100),(12,'regular',100),(18,'post',110),(22,'overnight',110),(2,'overnight',100)])

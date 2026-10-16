@@ -36,6 +36,7 @@ const actionLabels: Record<string, string> = {
   close_position: '平仓 LEAPS',
   close_unmanaged: '退出其他持仓',
   record_closed_unmanaged: '记录当日开平仓',
+  record_equity_sale: '记录股票部分卖出',
 }
 
 export function IbkrImportPage({ onImported }: { onImported: () => Promise<void> }) {

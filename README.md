@@ -150,6 +150,13 @@ import is rolled back. Older position snapshots cannot replace newer quantities,
 costs or closed states; missing historical transactions can still be reviewed and
 imported. Statement chronology is stored separately from market quote times.
 
+For a partial sale of BOXX or another holding in Other Holdings, a report with
+the remaining position snapshot and the sale's Basis and Realized P/L records
+the sold shares separately in closed holdings. The snapshot sets the remaining
+quantity, including when it was already imported; the execution never deducts
+those shares a second time. Sale cost and realized profit use the broker's
+reported values, preserving its cost-lot selection and fee calculation.
+
 Automatic financial imports support USD only. Non-USD or missing-currency rows
 are flagged for review rather than treated as dollars. NAV synchronization
 requires an explicit USD base currency in the statement's Account Information

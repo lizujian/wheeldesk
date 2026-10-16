@@ -130,6 +130,8 @@ class IbkrConnection:
             return prices and ticker.time is not None and ticker.marketDataType in {1, 2, 3, 4}
         result = {}
         pending = list(kwargs["contracts"])
+        for contract in pending:
+            self._errors.pop(contract.conId, None)
         for market_type in (3, 2, 4):  # delayed/live, entitled frozen, delayed frozen
             if not pending:
                 break
@@ -176,8 +178,14 @@ class IbkrConnection:
                     ib.cancelMktData(ticker.contract)
         return result
 
-    def error_for(self, con_id):
+    def error_for(self, con_id, *, sec_type=""):
         code = self._errors.get(con_id)
+        if code in {354, 10089, 10090, 10091, 10167, 10168}:
+            prices = "期权买卖价" if sec_type == "OPT" else "报价"
+            permission = "美国期权 OPRA 的 API 行情权限" if sec_type == "OPT" else "该合约的 API 行情权限"
+            retry = "期权常规交易时段外可能无买卖价，请在开盘后重新加载页面进行全量刷新；若仍失败，" if sec_type == "OPT" else ""
+            return (f"IBKR {code}：已尝试延迟及收市行情，仍无可用{prices}；"
+                    f"{retry}请检查{permission}，保留上次估值")
         return f"IBKR {code}：{ERRORS[code]}" if code else "IBKR 未返回可用报价，保留上次估值"
 
     def close(self):

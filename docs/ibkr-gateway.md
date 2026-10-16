@@ -42,6 +42,8 @@ env -u SSLKEYLOGFILE .venv/bin/python scripts/check_ibkr_market.py --history --c
 
 诊断结果取决于账户权限、订阅和当前交易时段。实时请求可能因缺少 API 行情权限返回 10089 或 10091；可用的延迟或收市报价仍可用于按需估值，并会标注实际质量。成功连接不代表所有股票、期权或 IV 的权限都已具备，需要分别检查对应诊断结果。
 
+10091 并不保证可以取得延迟期权买卖价，也不能仅凭它断定需要新增订阅。应用已自动尝试行情类型 3、2、4；IBKR 即使在请求延迟行情时，也可能优先返回类型 1 的部分数据。如果只有昨收价、Bid/Ask 为 -1，仍不能按 Long Bid / Short Ask 估值。期权常规交易时段外可能无买卖价；2026-10-14 的本机诊断中，开盘前 15 张期权均返回 10091 和无效买卖价，09:30 美东开盘后同一批合约均取得实时买卖价。此时保留上次估值，先在开盘后重新加载页面触发全量刷新；普通“刷新行情”只更新股票，不重查持仓期权。如果开盘后仍失败，再在 IBKR 客户门户的行情订阅中检查美国期权 OPRA 的 API 权限。股票延迟行情可用不代表期权权限可用。
+
 官方参考：[TWS API](https://www.interactivebrokers.com/docs/tws-api/doc/introduction)、[API 行情要求](https://www.interactivebrokers.com/docs/general/market-data-subscriptions/market-data-requirements)、[历史日线及 IV 定义](https://interactivebrokers.github.io/tws-api/historical_bars.html)。
 
 万亿俱乐部成员由用户维护，财报条件暂已停用，因此不依赖市值基本面或 WSH 财报日历订阅。旧账本内 Yahoo 来源标签只保留为历史报价出处，不代表当前仍调用 Yahoo。

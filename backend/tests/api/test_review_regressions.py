@@ -387,3 +387,116 @@ def test_legacy_matching_report_establishes_dates_without_using_new_quote_time(a
     changed = upload(client, statement('2026-10-02', quantity=20))
     assert changed.json()['imported'] == 1
     assert client.get('/api/positions').json()[0]['quantity'] == 20
+
+
+def test_market_refresh_does_not_block_legacy_position_cost_update_or_short_call_buyback(account):
+    from app.db_models import BrokerPositionSnapshot
+    client, sessions = account
+    with sessions() as session:
+        long = PositionRecord(bucket='leaps', symbol='DRAM', asset_type='option', direction='long',
+            option_type='call', quantity=1, multiplier=100, entry_price=10.68, current_price=11, tranche=1,
+            opened_on=date(2026, 10, 13), expiration=date(2027, 6, 17), strike=50,
+            quote_as_of=datetime(2026, 10, 15), quote_source='ibkr', quote_vendor='ibkr',
+            quote_quality='closed', quote_fetched_at=datetime(2026, 10, 15))
+        session.add(long)
+        session.flush()
+        short = UnmanagedPositionRecord(category='leaps_call_wheel', linked_position_id=long.id,
+            symbol='DRAM', asset_type='option', direction='short', option_type='call',
+            quantity=1, multiplier=100, entry_price=1.52, current_price=1,
+            opened_on=date(2026, 10, 13), expiration=date(2026, 10, 30), strike=55,
+            quote_as_of=date(2026, 10, 15), quote_source='ibkr', quote_vendor='ibkr',
+            quote_quality='closed', quote_fetched_at=datetime(2026, 10, 15))
+        session.add(short)
+        session.commit()
+        long_id, short_id = long.id, short.id
+        assert list(session.scalars(select(BrokerPositionSnapshot))) == []
+    content = '''Statement,Header,Field Name,Field Value
+Statement,Data,Period,2026-10-14
+Open Positions,Header,DataDiscriminator,Asset Category,Currency,Symbol,Quantity,Mult,Cost Price,Close Price
+Open Positions,Data,Summary,Equity and Index Options,USD,DRAM 17JUN27 50 C,1,100,10.685,11
+Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,Code
+Trades,Data,Order,Equity and Index Options,USD,DRAM 30OCT26 55 C,2026-10-14 11:57:02,1,1.02,C
+'''
+    response = upload(client, content)
+    assert response.status_code == 200, response.text
+    assert response.json()['needs_attention'] == 0, response.json()['notices']
+    assert response.json()['imported'] == 2
+    with sessions() as session:
+        assert session.get(PositionRecord, long_id).entry_price == Decimal('10.685')
+        assert session.get(UnmanagedPositionRecord, short_id).status == 'closed'
+        assert session.get(UnmanagedPositionRecord, short_id).closed_on == date(2026, 10, 14)
+        assert len(list(session.scalars(select(BrokerPositionSnapshot)))) == 2
+    repeated = upload(client, content)
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json()['imported'] == repeated.json()['needs_attention'] == 0
+
+
+@pytest.mark.parametrize('snapshot_already_imported', [False, True])
+@pytest.mark.parametrize('remaining_quantity', [100, 1795])
+def test_boxx_partial_sale_keeps_ending_shares_and_records_broker_realized_profit(account, snapshot_already_imported, remaining_quantity):
+    client, sessions = account
+    initial = statement('2026-10-14', quantity=remaining_quantity + 100, symbol='BOXX')
+    assert upload(client, initial).status_code == 200
+    ending = statement('2026-10-15', quantity=remaining_quantity, symbol='BOXX')
+    if snapshot_already_imported:
+        assert upload(client, ending).status_code == 200
+    trades = '''Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,Comm/Fee,Basis,Realized P/L,Code
+Trades,Data,Order,Stocks,USD,BOXX,2026-10-15 12:23:51,-100,118.61,-0.30489385,-11781.210558,79.484548,C;P
+'''
+    # Executions may precede ending snapshots in the exported CSV.
+    content = ending.replace('Open Positions,Header', trades + 'Open Positions,Header')
+    response = upload(client, content)
+    assert response.status_code == 200, response.text
+    assert response.json()['needs_attention'] == 0, response.json()['notices']
+    with sessions() as session:
+        remaining = session.scalar(select(UnmanagedPositionRecord).where(UnmanagedPositionRecord.status == 'open'))
+        sold = session.scalar(select(UnmanagedPositionRecord).where(UnmanagedPositionRecord.status == 'closed'))
+        assert remaining.quantity == remaining_quantity
+        assert sold.quantity == 100 and sold.symbol == 'BOXX'
+        assert sold.category == 'cash_equivalent'
+        assert sold.entry_price == Decimal('117.8121')
+        assert sold.exit_price == Decimal('118.61')
+        assert sold.realized_profit == Decimal('79.48')
+        assert sold.opened_on == date(2026, 10, 14)
+        assert sold.closed_on == date(2026, 10, 15)
+    before = client.get('/api/portfolio/summary').json()
+    repeated = upload(client, content)
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json()['imported'] == repeated.json()['needs_attention'] == 0
+    assert client.get('/api/portfolio/summary').json() == before
+    with sessions() as session:
+        assert len(list(session.scalars(select(UnmanagedPositionRecord)))) == 2
+
+
+def test_partial_equity_sale_selection_requires_ending_snapshot_and_rolls_back(account):
+    client, sessions = account
+    assert upload(client, statement('2026-10-14', quantity=200, symbol='BOXX')).status_code == 200
+    content = statement('2026-10-15', quantity=100, symbol='BOXX') + '''Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,Basis,Realized P/L,Code
+Trades,Data,Order,Stocks,USD,BOXX,2026-10-15 12:00:00,-100,510,-50000,999,C
+'''
+    preview = client.post('/api/imports/ibkr/preview', json={'filename': 'synthetic.csv', 'content': content}).json()
+    sale = next(row for row in preview['rows'] if row['action'] == 'record_equity_sale')
+    response = client.post('/api/imports/ibkr/confirm', json={
+        'filename': 'synthetic.csv', 'content': content,
+        'selected_fingerprints': [sale['fingerprint']], 'overrides': {}, 'confirmation': 'IMPORT',
+    })
+    assert response.status_code == 409, response.text
+    assert '期末持仓快照' in response.json()['detail']
+    with sessions() as session:
+        records = list(session.scalars(select(UnmanagedPositionRecord)))
+        assert len(records) == 1 and records[0].quantity == 200 and records[0].status == 'open'
+    assert upload(client, content).json()['needs_attention'] == 0
+
+
+@pytest.mark.parametrize('basis,quantity', [('', 200), ('-50000', 300)])
+def test_partial_equity_sale_with_missing_basis_or_conflicting_quantity_requires_review(account, basis, quantity):
+    client, sessions = account
+    assert upload(client, statement('2026-10-14', quantity=quantity, symbol='BOXX')).status_code == 200
+    content = statement('2026-10-15', quantity=100, symbol='BOXX') + f'''Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,Basis,Realized P/L,Code
+Trades,Data,Order,Stocks,USD,BOXX,2026-10-15 12:00:00,-100,510,{basis},999,C
+'''
+    response = upload(client, content)
+    assert response.status_code == 200, response.text
+    assert response.json()['needs_attention'] == 1
+    with sessions() as session:
+        assert len(list(session.scalars(select(UnmanagedPositionRecord)))) == 1

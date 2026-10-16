@@ -125,7 +125,7 @@ class IbkrMarketDataProvider:
                 values = self.connection.call("snapshots", contracts=batch)
                 with self._lock:
                     for c in batch:
-                        value = values.get(c.conId) or MarketDataError(self.connection.error_for(c.conId))
+                        value = values.get(c.conId) or MarketDataError(self.connection.error_for(c.conId, sec_type=c.secType))
                         self._cache[("quote", c.conId, c.exchange)] = (monotonic(), value)
                 missing = remaining
 

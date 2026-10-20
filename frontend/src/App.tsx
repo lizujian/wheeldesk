@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 
 import { AppShell } from './components/AppShell'
 import { SignalBanner } from './components/SignalBanner'
+import { MarketDataNotice } from './components/MarketDataNotice'
 import { api } from './lib/api'
 import type { MarketRefreshScope, MarketSnapshot, OtherHolding, OtherHoldingListing, PortfolioSummary, Position, Signal, WheelOverview } from './lib/types'
 
@@ -121,6 +122,7 @@ export default function App() {
   const [otherHoldings, setOtherHoldings] = useState<OtherHoldingListing>(emptyOtherHoldings)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
+  const [marketError, setMarketError] = useState('')
   const lastAutomaticPath = useRef<string | null>(null)
   const lastRefreshStartedAt = useRef<number | null>(null)
   const refreshInFlight = useRef(false)
@@ -155,11 +157,12 @@ export default function App() {
       const nextMarket = mergeMarketSnapshot(market, await api.refresh(scope))
       setMarket(nextMarket)
       writeCachedMarket(nextMarket)
+      setMarketError('')
       await load()
     } catch (reason) {
       setMarket((previous) => previous ? staleSnapshot(previous) : null)
       await load()
-      setError(reason instanceof Error ? reason.message : '刷新失败')
+      setMarketError(reason instanceof Error ? reason.message : '行情暂时无法刷新，请稍后重试')
     } finally {
       refreshInFlight.current = false
       setRefreshing(false)
@@ -178,9 +181,9 @@ export default function App() {
   const criticalSignalCount = activeSignals.filter((signal) => signal.severity === 'critical').length
   const pmccCalls = selectPmccCalls(otherHoldings)
   return (
-    <AppShell market={market} refreshing={refreshing} onRefresh={() => void refresh()} signalCount={activeSignals.length} criticalSignalCount={criticalSignalCount}>
+    <AppShell market={market} marketError={marketError} refreshing={refreshing} onRefresh={() => void refresh()} signalCount={activeSignals.length} criticalSignalCount={criticalSignalCount}>
       {error && <div className="error-toast" role="alert">{error}<button onClick={() => setError('')}>关闭</button></div>}
-      {Boolean(market?.errors?.length) && <div className="market-data-notice" role="status"><strong>部分行情未更新</strong>{market!.errors!.map((item) => <p key={`${item.symbol}:${item.error}`}>{item.symbol}：{item.error}</p>)}</div>}
+      <MarketDataNotice errors={market?.errors} />
       {market && <SignalBanner risk={market.risk} />}
       <Suspense fallback={<div className="page-loading">正在加载...</div>}><Routes>
         <Route path="/" element={<OverviewPage portfolio={portfolio} onInitialize={async (payload) => { setPortfolio(await api.initialize(payload)); await load() }} />} />

@@ -8,6 +8,7 @@ import {
   RefreshCw,
   Settings,
   Sparkles,
+  WifiOff,
 } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 import type { ReactNode } from 'react'
@@ -25,14 +26,16 @@ const destinations = [
   ['/settings', '设置', Settings],
 ] as const
 
-export function AppShell({ children, market, refreshing, onRefresh, signalCount, criticalSignalCount }: {
+export function AppShell({ children, market, marketError = '', refreshing, onRefresh, signalCount, criticalSignalCount }: {
   children: ReactNode
   market: MarketSnapshot | null
+  marketError?: string
   refreshing: boolean
   onRefresh: () => void
   signalCount: number
   criticalSignalCount: number
 }) {
+  const sourceLabel = market ? marketSourceLabel(market) : 'IB Gateway'
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -49,10 +52,17 @@ export function AppShell({ children, market, refreshing, onRefresh, signalCount,
       <div className="work-area">
         <header className="topbar">
           <div className="mobile-brand">WheelDesk</div>
-          <div className="data-state">
+          <div className={`data-state ${marketError ? 'unavailable' : ''}`} role="status" aria-label="行情连接状态">
+            {marketError ? <button
+              className="source-badge unavailable"
+              onClick={onRefresh}
+              disabled={refreshing}
+              title={`${marketError}；点击重试`}
+              aria-label={`${sourceLabel}：${marketError}，点击重试`}
+            ><WifiOff size={12} aria-hidden="true" />{sourceLabel}<span className="source-connection-state"> · {refreshing ? '重试中' : '暂不可用'}</span></button> : market ? <span className={`source-badge ${market.source}`}>{sourceLabel}</span> : <span>尚未刷新行情</span>}
             {market ? (
-              <><span className={`source-badge ${market.source}`}>{marketSourceLabel(market)}</span><span>{market.as_of}</span>{market.stale && <strong>数据已过期</strong>}{Boolean(market.errors?.length) && <strong>部分行情不可用</strong>}</>
-            ) : <span>尚未刷新行情</span>}
+              <><span>{market.as_of}</span>{market.stale && <strong>数据已过期</strong>}{Boolean(market.errors?.length) && <strong>部分行情不可用</strong>}</>
+            ) : null}
           </div>
           <NavLink className={`global-signal-indicator ${signalCount ? 'active' : ''} ${criticalSignalCount ? 'critical' : ''}`} to="/signals" aria-label={signalCount ? `${signalCount} 条待处理信号` : '暂无待处理信号'}>
             <BellRing size={17} aria-hidden="true" />

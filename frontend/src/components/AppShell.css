@@ -81,6 +81,7 @@
 }
 
 @media (max-width: 720px) {
+  .data-state.unavailable > strong, .source-connection-state { display: none; }
   .app-shell > .mobile-nav { grid-template-columns: repeat(7, minmax(0, 1fr)); }
   .topbar .global-signal-indicator {
     min-width: 38px;
@@ -91,3 +92,14 @@
   .topbar .global-signal-indicator > span { display: none; }
   .topbar .primary-button { flex: 0 0 38px; }
 }
+.data-state .source-badge.unavailable {
+  gap: 5px;
+  border-color: #ddb7b3;
+  background: #fbefed;
+  color: #a3443e;
+  white-space: nowrap;
+}
+
+.data-state .source-badge.unavailable:hover:not(:disabled) { background: #f6e3e0; }
+.data-state .source-badge.unavailable:focus-visible { outline: 2px solid var(--red); outline-offset: 3px; }
+.data-state .source-badge.unavailable:disabled { cursor: wait; }
